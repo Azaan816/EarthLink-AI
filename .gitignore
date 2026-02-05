@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdk
+!.yarn/versions
+venv/
+.venv/
+env/
+.env/
+
+# Build and Output
+frontend/.next/
+frontend/out/
+frontend/build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Python artifacts
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/.pytest_cache/
+**/.mypy_cache/
+**/.venv/
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+frontend/.env*
+
+# Debug and Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# Testing
+coverage/
+.nyc_output/
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Agent/Tool specific
+.agents/*
+.agent/*
+*.tmp
+plan.md
+# Data (Passive Precomputed Data)
+# Depending on the size, you might want to ignore large GeoJSON/GeoTIFF files
+# /frontend/public/data/*.geojson
+# /frontend/public/data/*.tif
+# /backend/testdata/
