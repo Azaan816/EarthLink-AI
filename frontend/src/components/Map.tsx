@@ -5,7 +5,7 @@ import Map, { NavigationControl, Source, Layer } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useMapChat } from "@/context/MapChatContext";
-import { MapPin, Square } from "lucide-react";
+import { MapPin, Square, Layers } from "lucide-react";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -91,6 +91,7 @@ export default function MapComponent() {
     activeFilter,
     isLayerVisible,
     mapStyle,
+    setMapStyle,
     clearFlyToRequest,
   } = useMapChat();
 
@@ -126,9 +127,6 @@ export default function MapComponent() {
   return (
     <div className="w-full h-screen min-h-screen bg-gray-900 relative">
       <div className="absolute left-3 top-3 z-10 flex flex-col gap-2">
-        <div className="rounded bg-gray-900/80 px-2 py-1.5 text-xs text-gray-400 shadow">
-          SF environmental grid — color by greenery
-        </div>
         <div className="flex rounded bg-gray-900/90 shadow overflow-hidden">
           <button
             type="button"
@@ -154,6 +152,14 @@ export default function MapComponent() {
             title="Click twice to draw a rectangle: first corner, then opposite corner"
           >
             <Square size={14} /> Region
+          </button>
+          <button
+            type="button"
+            onClick={() => setMapStyle(mapStyle === "dark" ? "satellite" : "dark")}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors border-l border-gray-800 ${mapStyle === "satellite" ? "bg-emerald-600 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
+            title="Toggle Satellite View"
+          >
+            <Layers size={14} /> {mapStyle === "satellite" ? "Map" : "Satellite"}
           </button>
         </div>
         {selectionMode === "region" && bboxCorner1 && (
@@ -198,48 +204,6 @@ export default function MapComponent() {
         attributionControl={false}
         onError={(e) => console.error("Mapbox Error:", e)}
       >
-        {activeDataUrl && isLayerVisible && (
-          <Source id="sf-features" type="geojson" data={activeDataUrl}>
-            <Layer
-              id="sf-fill"
-              type="fill"
-              paint={{
-                "fill-color": [
-                  "interpolate",
-                  ["linear"],
-                  ["get", "green_score"],
-                  0,
-                  "#1a1a2e",
-                  0.3,
-                  "#16213e",
-                  0.6,
-                  "#0f3460",
-                  1,
-                  "#00c853",
-                ],
-                "fill-opacity": [
-                  "case",
-                  ["boolean", ["get", "active_filter_match"], true],
-                  0.5,
-                  0.1
-                ],
-              }}
-              filter={
-                activeFilter
-                  ? createMapboxFilter(activeFilter)
-                  : ["all"]
-              }
-            />
-            <Layer
-              id="sf-outline"
-              type="line"
-              paint={{
-                "line-color": "#334155",
-                "line-width": 0.5,
-              }}
-            />
-          </Source>
-        )}
         {selectedPoint && (
           <Source
             id="selected-point"
@@ -259,6 +223,31 @@ export default function MapComponent() {
               paint={{
                 "circle-radius": 8,
                 "circle-color": "#10b981",
+                "circle-stroke-width": 2,
+                "circle-stroke-color": "#fff",
+              }}
+            />
+          </Source>
+        )}
+        {selectionMode === "region" && bboxCorner1 && (
+          <Source
+            id="bbox-corner-1"
+            type="geojson"
+            data={{
+              type: "Feature",
+              geometry: {
+                type: "Point",
+                coordinates: [bboxCorner1.lng, bboxCorner1.lat],
+              },
+              properties: {},
+            }}
+          >
+            <Layer
+              id="bbox-corner-1-circle"
+              type="circle"
+              paint={{
+                "circle-radius": 6,
+                "circle-color": "#f59e0b",
                 "circle-stroke-width": 2,
                 "circle-stroke-color": "#fff",
               }}

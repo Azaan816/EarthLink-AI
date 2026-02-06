@@ -20,7 +20,13 @@ interface GrowthChartProps {
 // Separate component for the actual chart logic to be reused
 function GrowthChartContent({ title, metric = "Value", trend = [], locationLabel }: GrowthChartProps) {
     if (!trend || trend.length === 0) {
-        return <div className="text-gray-400 text-sm p-4 text-center">No trend data available.</div>;
+        return (
+            <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
+                <p className="text-gray-400 text-sm">Analyzing temporal data...</p>
+                <p className="text-gray-500 text-xs mt-2">Generating trend analysis for {metric}</p>
+            </div>
+        );
     }
 
     const getStrokeColor = (m: string) => {

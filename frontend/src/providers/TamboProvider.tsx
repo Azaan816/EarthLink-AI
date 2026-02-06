@@ -197,13 +197,22 @@ function useMapChatTools() {
 
     const showOnMap = defineTool({
       name: "show_on_map",
-      description:
-        "Show a location on the map: either as a pinpoint (green pin) or by highlighting the area (green rectangle). Use after find_extreme. To highlight the area, pass the result's bbox (e.g. results[0].bbox). For only a pin, pass longitude and latitude (e.g. results[0].center.longitude, results[0].center.latitude). Prefer bbox when the user asks for 'area' or 'location' so the cell is visibly highlighted.",
+      description: `Highlight a location on the map by showing a pin or highlighting an area.
+
+USAGE AFTER find_extreme or analyze_proximity:
+- These tools return results with a 'bbox' field
+- ALWAYS pass that bbox directly: show_on_map(bbox: results[0].bbox)
+- Example: If results[0].bbox = [-122.46, 37.70, -122.45, 37.71], pass that exact array
+
+USAGE FOR COORDINATES:
+- Pass both longitude AND latitude together: show_on_map(longitude: -122.4613, latitude: 37.7073)
+
+CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call this tool without parameters.`,
       inputSchema: z.object({
-        longitude: z.number().optional().describe("Center longitude for a pin. Omit if using bbox to highlight area."),
-        latitude: z.number().optional().describe("Center latitude for a pin. Omit if using bbox to highlight area."),
-        bbox: z.array(z.number()).length(4).optional().describe("[min_lng, min_lat, max_lng, max_lat] from find_extreme result—use this to highlight the area (green rectangle) on the map"),
-        zoom: z.number().min(1).max(18).optional().describe("Map zoom (default 14 for pin, 12 for area)"),
+        longitude: z.number().optional().describe("Center longitude. Required if bbox not provided. Example: -122.4613"),
+        latitude: z.number().optional().describe("Center latitude. Required if bbox not provided. Example: 37.7073"),
+        bbox: z.array(z.number()).length(4).optional().describe("Array [minLng, minLat, maxLng, maxLat]. Get from results[0].bbox after find_extreme or analyze_proximity. Example: [-122.46, 37.70, -122.45, 37.71]. PREFERRED for highlighting grid cells."),
+        zoom: z.number().min(1).max(18).optional().describe("Map zoom level (default 14 for pin, 12 for area)"),
       }),
       outputSchema: z.object({ success: z.boolean() }),
       tool: ({ longitude, latitude, bbox, zoom }) => {
@@ -358,10 +367,7 @@ function useMapChatTools() {
             const lower = t.toLowerCase();
             if (lower === "selected" || lower === "current") {
               if (selectedPoint) {
-                console.log("[Tambo] Resolved 'selected' to point:", selectedPoint);
                 finalTargets.push({ longitude: selectedPoint.lng, latitude: selectedPoint.lat });
-              } else {
-                console.warn("[Tambo] 'selected' target requested but no selectedPoint exists.");
               }
             } else if (lower.startsWith("point:")) {
               const parts = lower.replace("point:", "").split(",");
@@ -381,7 +387,7 @@ function useMapChatTools() {
           }
         }
 
-        // Fallback: If no targets and we have a selection, use it as one target 
+        // Fallback: If no targets and we have a selection, use it as one target
         // (though comparison usually needs >1, the backend handles single lookup too)
         if (finalTargets.length === 0 && selectedPoint) {
           finalTargets.push({ longitude: selectedPoint.lng, latitude: selectedPoint.lat });
@@ -389,7 +395,16 @@ function useMapChatTools() {
 
         if (finalTargets.length === 0) return { error: "No valid locations to compare." };
 
-        return await fetchComparison(finalTargets);
+        const response = await fetchComparison(finalTargets);
+
+        // Extract just the comparison array from the backend response
+        // Backend returns: { status: "success", comparison: [...] }
+        // Component expects: just the array
+        if (response && response.comparison) {
+          return response.comparison;
+        }
+
+        return response;
       },
     });
 
@@ -419,7 +434,21 @@ function useMapChatTools() {
             return { error: "No location selected." };
           }
         }
-        return await fetchTemporalTrend({ metric, longitude: lng, latitude: lat, feature_id });
+        const response = await fetchTemporalTrend({ metric, longitude: lng, latitude: lat, feature_id });
+
+        // Extract and format data for GrowthChart component
+        // Backend returns: { status, location_id, metric, trend, hint }
+        // Component expects: { title, metric, locationLabel, trend }
+        if (response && response.trend) {
+          return {
+            trend: response.trend,
+            metric: response.metric || metric,
+            locationLabel: response.location_id ? `Grid Cell ${response.location_id}` : undefined,
+            title: `${metric.toUpperCase()} Trend Over Time`
+          };
+        }
+
+        return response;
       }
     });
 
