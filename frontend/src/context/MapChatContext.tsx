@@ -23,7 +23,11 @@ export interface MapChatState {
   bboxCorner1: { lng: number; lat: number } | null;
   selectionMode: SelectionMode;
   activeDataUrl: string | null;
+  activeFilter: string | null;
+  isLayerVisible: boolean;
+  mapStyle: "dark" | "satellite";
 }
+
 
 const SAN_FRANCISCO_VIEWPORT: Viewport = {
   longitude: -122.4194,
@@ -39,7 +43,11 @@ const defaultState: MapChatState = {
   bboxCorner1: null,
   selectionMode: "point",
   activeDataUrl: "/data/sf/features.geojson",
+  activeFilter: null,
+  isLayerVisible: true,
+  mapStyle: "dark",
 };
+
 
 interface MapChatContextValue extends MapChatState {
   setViewport: (v: Viewport) => void;
@@ -48,7 +56,11 @@ interface MapChatContextValue extends MapChatState {
   setBboxCorner1: (p: { lng: number; lat: number } | null) => void;
   setSelectionMode: (m: SelectionMode) => void;
   setActiveDataUrl: (url: string | null) => void;
+  setActiveFilter: (filter: string | null) => void;
+  setIsLayerVisible: (visible: boolean) => void;
+  setMapStyle: (style: "dark" | "satellite") => void;
   flyTo: (longitude: number, latitude: number, zoom?: number) => void;
+
   clearFlyToRequest: () => void;
 }
 
@@ -62,8 +74,12 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
   const [bboxCorner1, setBboxCorner1] = useState<MapChatState["bboxCorner1"]>(defaultState.bboxCorner1);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(defaultState.selectionMode);
   const [activeDataUrl, setActiveDataUrl] = useState<string | null>(defaultState.activeDataUrl);
+  const [activeFilter, setActiveFilter] = useState<string | null>(defaultState.activeFilter);
+  const [isLayerVisible, setIsLayerVisible] = useState<boolean>(defaultState.isLayerVisible);
+  const [mapStyle, setMapStyle] = useState<"dark" | "satellite">(defaultState.mapStyle);
 
   const setViewport = useCallback((v: Viewport) => setViewportState(v), []);
+
   const clearFlyToRequest = useCallback(() => setFlyToRequest(null), []);
   const flyTo = useCallback((longitude: number, latitude: number, zoom?: number) => {
     setViewportState((prev) => ({
@@ -87,17 +103,26 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
       bboxCorner1,
       selectionMode,
       activeDataUrl,
+      activeFilter,
+      isLayerVisible,
+      mapStyle,
       setViewport,
+
       setSelectedPoint,
       setSelectedRegion,
       setBboxCorner1,
       setSelectionMode,
       setActiveDataUrl,
+      setActiveFilter,
+      setIsLayerVisible,
+      setMapStyle,
       flyTo,
       clearFlyToRequest,
+
     }),
-    [viewport, flyToRequest, selectedPoint, selectedRegion, bboxCorner1, selectionMode, activeDataUrl, setViewport, flyTo, clearFlyToRequest]
+    [viewport, flyToRequest, selectedPoint, selectedRegion, bboxCorner1, selectionMode, activeDataUrl, activeFilter, isLayerVisible, mapStyle, setViewport, flyTo, clearFlyToRequest]
   );
+
 
   return <MapChatContext.Provider value={value}>{children}</MapChatContext.Provider>;
 }

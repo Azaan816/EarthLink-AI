@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from geo_utils import bbox_intersects, get_polygon_ring, point_in_polygon, ring_bbox, ring_center
+from geo_utils import bbox_intersects, get_polygon_ring, point_in_polygon, ring_bbox, ring_center, haversine_distance
 
 # Initialize FastAPI
 app = FastAPI(title="EarthLink AI - Python MCP Server")
@@ -288,6 +288,196 @@ async def find_extreme(req: FindExtremeRequest):
         "mode": req.mode,
         "results": top,
         "hint": "Use show_on_map with the first result's center (longitude, latitude) to show a pin, or bbox to highlight the area.",
+    }
+
+
+
+class ProximityRequest(BaseModel):
+    longitude: float
+    latitude: float
+    radius_meters: float = 1000.0
+    metric: Optional[str] = None
+    threshold: Optional[float] = None  # e.g. 0.5 (find green_score > 0.5)
+
+
+@app.post("/insight/proximity")
+async def insight_proximity(req: ProximityRequest):
+    """Find SF grid cells within radius_meters of a point, optionally filtering by metric > threshold."""
+    if req.radius_meters <= 0 or req.radius_meters > 10000:
+        raise HTTPException(status_code=400, detail="radius_meters must be between 0 and 10000")
+
+    features = get_sf_features()
+    results = []
+
+    for f in features:
+        ring = get_polygon_ring(f)
+        if not ring:
+            continue
+        
+        # Check distance from center
+        center = ring_center(ring)
+        dist = haversine_distance(req.longitude, req.latitude, center[0], center[1])
+        
+        if dist <= req.radius_meters:
+            props = f.get("properties") or {}
+            
+            # Optional metric filtering
+            if req.metric and req.threshold is not None:
+                val = props.get(req.metric)
+                if val is None:
+                    continue
+                try:
+                    if float(val) < req.threshold:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            
+            results.append({
+                "feature_id": f.get("id"),
+                "distance": round(dist, 1),
+                "properties": props,
+                "bbox": ring_bbox(ring)
+            })
+
+    # Sort by distance
+    results.sort(key=lambda x: x["distance"])
+    
+    # Cap results to avoid overwhelming payload
+    results = results[:50]
+
+    return {
+        "status": "success",
+        "count": len(results),
+        "radius_meters": req.radius_meters,
+        "results": results,
+        "hint": "Use show_on_map with bbox of interesting results."
+    }
+
+
+class CompareRequest(BaseModel):
+    targets: List[Dict[str, Any]]
+
+
+@app.post("/insight/compare")
+async def insight_compare(req: CompareRequest):
+    """Compare multiple locations (by feature_id or point). Returns side-by-side metrics."""
+    features = get_sf_features()
+    results = []
+
+    for target in req.targets:
+        fid = target.get("feature_id")
+        lng = target.get("longitude")
+        lat = target.get("latitude")
+        
+        found = None
+        if fid:
+            # Find by ID
+            for f in features:
+                if str(f.get("id")) == str(fid):
+                    found = f
+                    break
+        elif lng is not None and lat is not None:
+            # Find by Point
+            for f in features:
+                ring = get_polygon_ring(f)
+                if ring and point_in_polygon(lng, lat, ring):
+                    found = f
+                    break
+        
+        if found:
+            props = found.get("properties") or {}
+            # Ensure we have a label
+            label = fid if fid else f"({round(lng,4)}, {round(lat,4)})"
+            results.append({
+                "type": "feature",
+                "id": found.get("id"),
+                "label": label,
+                "metrics": {
+                    "NDVI": props.get("ndvi"),
+                    "LST": props.get("lst"),
+                    "Heat Score": props.get("heat_score"),
+                    "Green Score": props.get("green_score"),
+                    "Elevation": props.get("elevation")
+                }
+            })
+        else:
+            results.append({
+                "type": "not_found",
+                "target": target,
+                "label": "Unknown Location"
+            })
+
+    return {
+        "status": "success",
+        "comparison": results
+    }
+
+
+class TemporalRequest(BaseModel):
+    feature_id: Optional[str] = None
+    longitude: Optional[float] = None
+    latitude: Optional[float] = None
+    metric: str = "ndvi"  # Default metric
+
+
+@app.post("/insight/temporal")
+async def insight_temporal(req: TemporalRequest):
+    """Return mock temporal trend data for a location."""
+    # Validate metric
+    if req.metric not in ALLOWED_FIND_METRICS:
+         raise HTTPException(status_code=400, detail=f"Invalid metric. Allowed: {ALLOWED_FIND_METRICS}")
+
+    # Identify location (just to ensure it exists, though data is mock)
+    features = get_sf_features()
+    found = None
+    if req.feature_id:
+        for f in features:
+            if str(f.get("id")) == str(req.feature_id):
+                found = f
+                break
+    elif req.longitude is not None and req.latitude is not None:
+         for f in features:
+            ring = get_polygon_ring(f)
+            if ring and point_in_polygon(req.longitude, req.latitude, ring):
+                found = f
+                break
+    
+    if not found:
+        return {"status": "error", "message": "Location not found"}
+
+    # Generate Mock Data (Yearly trend)
+    # Base value from current property
+    current_val = found["properties"].get(req.metric) or 0.5
+    
+    # Create artificial trend: slightly increasing or decreasing noise
+    import random
+    random.seed(str(found.get("id")) + req.metric)
+    
+    trend = []
+    start_year = 2018
+    end_year = 2024
+    
+    val = float(current_val) * 0.9 # Start a bit lower?
+    
+    for year in range(start_year, end_year + 1):
+        # random fluctuation
+        change = random.uniform(-0.05, 0.08)
+        val = val * (1 + change)
+        val = max(0, min(1, val)) # Clamp 0-1 for scores
+        if req.metric in ["lst", "elevation", "slope"]:
+            val = max(0, val) # No clamp 1 for absolute values
+            
+        trend.append({
+            "year": year,
+            "value": round(val, 3)
+        })
+        
+    return {
+        "status": "success",
+        "location_id": found.get("id"),
+        "metric": req.metric,
+        "trend": trend,
+        "hint": "Render this data using a LineChart."
     }
 
 

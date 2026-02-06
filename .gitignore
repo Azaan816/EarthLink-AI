@@ -62,6 +62,8 @@ Thumbs.db
 .agent/*
 *.tmp
 plan.md
+docs/
+
 # Data (Passive Precomputed Data)
 # Depending on the size, you might want to ignore large GeoJSON/GeoTIFF files
 # /frontend/public/data/*.geojson

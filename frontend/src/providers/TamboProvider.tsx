@@ -4,11 +4,13 @@ import React, { useMemo } from "react";
 import { TamboProvider, TamboComponent, defineTool } from "@tambo-ai/react";
 import { z } from "zod";
 import { useMapChat } from "@/context/MapChatContext";
-import { fetchPointInsight, fetchRegionInsight, fetchFindExtreme } from "@/lib/insight-api";
+import { fetchPointInsight, fetchRegionInsight, fetchFindExtreme, fetchProximity, fetchComparison, fetchTemporalTrend } from "@/lib/insight-api";
 import InsightCard from "@/components/InsightCard";
 import MetricsTable from "@/components/MetricsTable";
 import KeyTakeaways from "@/components/KeyTakeaways";
 import RegionSummaryCard from "@/components/RegionSummaryCard";
+import ComparisonTable from "@/components/ComparisonTable";
+import GrowthChart from "@/components/GrowthChart";
 
 const components: TamboComponent[] = [
   {
@@ -72,10 +74,33 @@ const components: TamboComponent[] = [
       interpretation: z.string().optional().describe("Interpretation or recommendation"),
     }),
   },
+  {
+    name: "ComparisonTable",
+    description: "Display a side-by-side comparison of multiple locations. Use when the user asks to compare two or more places. Shows metrics for each location.",
+    component: ComparisonTable,
+    propsSchema: z.object({
+      title: z.string().optional().default("Location Comparison"),
+      comparison: z.array(z.any()).optional().default([]).describe("Array of comparison results from compare_locations tool"),
+    }),
+  },
+  {
+    name: "GrowthChart",
+    description: "Display a line chart showing a trend over time. Use when analyzing temporal trends (e.g. 'how has NDVI changed?').",
+    component: GrowthChart,
+    propsSchema: z.object({
+      title: z.string().optional(),
+      metric: z.string().optional().default("Value").describe("Metric being displayed (e.g. NDVI)"),
+      locationLabel: z.string().optional().describe("Label for the location"),
+      trend: z.array(z.object({
+        year: z.number().optional().default(0),
+        value: z.number().optional().default(0)
+      })).optional().default([]).describe("Array of {year, value} objects"),
+    }),
+  },
 ];
 
 function useMapChatTools() {
-  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion } = useMapChat();
+  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setMapStyle } = useMapChat();
 
   return useMemo(() => {
     const navigateMap = defineTool({
@@ -205,9 +230,203 @@ function useMapChatTools() {
       },
     });
 
-    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap];
-  }, [flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion]);
+
+
+    const filterMapView = defineTool({
+      name: "filter_map_view",
+      description:
+        "Filter the map visual style to show only specific areas. Use when user says 'show me only hot areas' or 'highlight areas with high NDVI'. This sets a visual filter on the map.",
+      inputSchema: z.object({
+        filter: z.string().describe("Filter expression description (e.g. 'NDVI > 0.5', 'Heat Score > 0.8')"),
+      }),
+      outputSchema: z.object({ success: z.boolean() }),
+      tool: ({ filter }) => {
+        setActiveFilter(filter);
+        return { success: true, message: `Map filter set to: ${filter}` };
+      },
+    });
+
+    const analyzeProximity = defineTool({
+      name: "analyze_proximity",
+      description:
+        "Find grid cells within a radius of a specific point. Use for 'find greenest spot within 500m' or 'what is near here'. Returns specific matching cells with their distance.",
+      inputSchema: z.object({
+        longitude: z.number().optional().describe("Center longitude (defaults to selected point)"),
+        latitude: z.number().optional().describe("Center latitude (defaults to selected point)"),
+        radius_meters: z.number().optional().default(1000).describe("Radius in meters (default 1000)"),
+        metric: z.enum(["green_score", "heat_score", "ndvi", "lst"]).optional().describe("Optional metric to filter by (e.g. green_score)"),
+        threshold: z.number().optional().describe("Optional minimum threshold for the metric (e.g. 0.5)"),
+      }),
+      outputSchema: z.any(),
+      tool: async ({ longitude, latitude, radius_meters, metric, threshold }) => {
+        let lng = longitude;
+        let lat = latitude;
+        if (lng == null || lat == null) {
+          if (!selectedPoint) return { error: "No point selected. Provide location or select a point." };
+          lng = selectedPoint.lng;
+          lat = selectedPoint.lat;
+        }
+        return await fetchProximity({ longitude: lng, latitude: lat, radius_meters, metric, threshold });
+      },
+    });
+
+    const searchPlaces = defineTool({
+      name: "search_places",
+      description:
+        "Search for a place by name (Geocoding) and fly to it. Use when user asks to 'go to [Place Name]'.",
+      inputSchema: z.object({
+        query: z.string().describe("Place name to search for (e.g. 'Golden Gate Bridge', 'Ferry Building')"),
+      }),
+      outputSchema: z.any(),
+      tool: async ({ query }) => {
+        const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+        if (!mapboxToken) return { error: "Mapbox token missing" };
+
+        try {
+          // Increase limit to 5 to find better matches
+          const res = await fetch(
+            `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${mapboxToken}&bbox=-122.5155,37.7024,-122.3549,37.8324&proximity=-122.4194,37.7749&limit=5`
+          );
+          const data = await res.json();
+          if (!data.features || data.features.length === 0) {
+            return { found: false, message: "Place not found in San Francisco." };
+          }
+
+          // Improved selection logic: prioritize POIs and exact name matches
+          let bestFeature = data.features[0];
+
+          // Look for a POI with high relevance
+          const poiMatch = data.features.find((f: any) =>
+            (f.place_type.includes("poi") || f.place_type.includes("landmark")) && f.relevance > 0.8
+          );
+
+          if (poiMatch) {
+            bestFeature = poiMatch;
+          }
+
+          const feature = bestFeature;
+          const [lng, lat] = feature.center;
+          flyTo(lng, lat, 14);
+          setSelectedPoint({ lng, lat });
+          setSelectedRegion(null);
+          return { found: true, name: feature.text, coordinates: { lng, lat } };
+        } catch (e) {
+          return { error: "Geocoding failed" };
+        }
+      },
+    });
+
+
+    const toggleMapLayer = defineTool({
+      name: "toggle_map_layer",
+      description: "Control map visibility and style. Use to hide/show data or switch to satellite view.",
+      inputSchema: z.object({
+        layer_visible: z.boolean().optional().describe("True to show data layer, false to hide"),
+        map_style: z.enum(["dark", "satellite"]).optional().describe("Map style"),
+      }),
+      outputSchema: z.object({ success: z.boolean() }),
+      tool: ({ layer_visible, map_style }) => {
+        if (layer_visible !== undefined) setIsLayerVisible(layer_visible);
+        if (map_style !== undefined) setMapStyle(map_style);
+        return { success: true };
+      },
+    });
+
+    const compareLocations = defineTool({
+      name: "compare_locations",
+      description: "Compare the user's selected location (or specific points) with others. Use for questions like 'compare this with Ferry Building'.",
+      inputSchema: z.object({
+        targets: z.array(z.union([
+          z.object({
+            feature_id: z.string().optional(),
+            longitude: z.number().optional(),
+            latitude: z.number().optional()
+          }),
+          z.string().describe("Shorthand: 'selected' for current point, 'point:lng,lat' for coords, 'feature:id' for ID")
+        ])).optional().describe("List of targets. Can be objects or shorthand strings."),
+        placeholder_target_query: z.string().optional()
+      }),
+      outputSchema: z.any(),
+      tool: async ({ targets }) => {
+        console.log("[Tambo] compare_locations called with:", JSON.stringify(targets));
+        let rawTargets = targets || [];
+        const finalTargets: Array<{ feature_id?: string; longitude?: number; latitude?: number }> = [];
+
+        for (const t of rawTargets) {
+          console.log(`[Tambo] processing target: ${JSON.stringify(t)}, type: ${typeof t}`);
+          if (typeof t === "string") {
+            const lower = t.toLowerCase();
+            if (lower === "selected" || lower === "current") {
+              if (selectedPoint) {
+                console.log("[Tambo] Resolved 'selected' to point:", selectedPoint);
+                finalTargets.push({ longitude: selectedPoint.lng, latitude: selectedPoint.lat });
+              } else {
+                console.warn("[Tambo] 'selected' target requested but no selectedPoint exists.");
+              }
+            } else if (lower.startsWith("point:")) {
+              const parts = lower.replace("point:", "").split(",");
+              if (parts.length === 2) {
+                const lng = parseFloat(parts[0]);
+                const lat = parseFloat(parts[1]);
+                if (!isNaN(lng) && !isNaN(lat)) {
+                  finalTargets.push({ longitude: lng, latitude: lat });
+                }
+              }
+            } else if (lower.startsWith("feature:")) {
+              finalTargets.push({ feature_id: lower.replace("feature:", "") });
+            }
+          } else if (typeof t === "object" && t !== null) {
+            // It's already an object, pass it through
+            finalTargets.push(t);
+          }
+        }
+
+        // Fallback: If no targets and we have a selection, use it as one target 
+        // (though comparison usually needs >1, the backend handles single lookup too)
+        if (finalTargets.length === 0 && selectedPoint) {
+          finalTargets.push({ longitude: selectedPoint.lng, latitude: selectedPoint.lat });
+        }
+
+        if (finalTargets.length === 0) return { error: "No valid locations to compare." };
+
+        return await fetchComparison(finalTargets);
+      },
+    });
+
+    const analyzeTemporalTrends = defineTool({
+      name: "analyze_temporal_trends",
+      description: "Show a trend over time for a location. Use for 'how has vegetation changed here?'. Returns trend data.",
+      inputSchema: z.object({
+        metric: z.enum(
+          ["heat_score", "green_score", "lst", "ndvi", "evi", "ndbi", "bsi", "fog_score", "elevation", "slope", "night_lights"]
+        ).describe("Metric to analyze"),
+        longitude: z.number().optional(),
+        latitude: z.number().optional(),
+        feature_id: z.string().optional()
+      }),
+      outputSchema: z.any(),
+      tool: async ({ metric, longitude, latitude, feature_id }) => {
+        let lng = longitude;
+        let lat = latitude;
+        // Use selection if not provided
+        if (lng == null && lat == null && feature_id == null) {
+          if (selectedPoint) {
+            lng = selectedPoint.lng;
+            lat = selectedPoint.lat;
+          } else if (selectedRegion && selectedRegion.type === "featureId") {
+            // Not supported well yet, but maybe
+          } else {
+            return { error: "No location selected." };
+          }
+        }
+        return await fetchTemporalTrend({ metric, longitude: lng, latitude: lat, feature_id });
+      }
+    });
+
+    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, searchPlaces, toggleMapLayer, compareLocations, analyzeTemporalTrends];
+  }, [flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setMapStyle]);
 }
+
 
 export function TamboAIProvider({ children }: { children: React.ReactNode }) {
   const apiKey = process.env.NEXT_PUBLIC_TAMBO_API_KEY;

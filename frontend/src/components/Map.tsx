@@ -29,6 +29,50 @@ function bboxToGeoJSON(bbox: [number, number, number, number]) {
   };
 }
 
+function createMapboxFilter(filterExpression: string): any[] {
+  // Simple parser for "Metric > Value" or "Metric < Value"
+  // e.g. "NDVI > 0.5", "Heat Score < 0.3"
+  // Returns a Mapbox filter expression
+  try {
+    const lower = filterExpression.toLowerCase();
+    const parts = lower.split(/(>|<|=)/).map(s => s.trim());
+
+    if (parts.length !== 3) return ["all"];
+
+    const [metricRaw, operator, valueRaw] = parts;
+    const value = parseFloat(valueRaw);
+
+    if (isNaN(value)) return ["all"];
+
+    // Map human metric names to properties
+    const metricMap: Record<string, string> = {
+      "ndvi": "ndvi",
+      "green_score": "green_score",
+      "green score": "green_score",
+      "heat_score": "heat_score",
+      "heat score": "heat_score",
+      "lst": "lst",
+      "elevation": "elevation"
+    };
+
+    const prop = metricMap[metricRaw] || metricRaw;
+
+    // Mapbox filter syntax: [operator, property, value]
+    // Note: 'properties.' prefix is implied in data-driven styling but for filter we use ["get", prop] usually, 
+    // or ["operator", ["get", prop], value]
+
+    // For 'filter' prop on Layer/Source, we can use:
+    // [">", ["get", "ndvi"], 0.5]
+
+    return [operator, ["get", prop], value];
+
+  } catch (e) {
+    console.warn("Failed to parse filter:", filterExpression);
+    return ["all"];
+  }
+}
+
+
 export default function MapComponent() {
   const mapRef = useRef<MapRef>(null);
   const {
@@ -44,8 +88,12 @@ export default function MapComponent() {
     setBboxCorner1,
     setSelectionMode,
     activeDataUrl,
+    activeFilter,
+    isLayerVisible,
+    mapStyle,
     clearFlyToRequest,
   } = useMapChat();
+
 
   useEffect(() => {
     if (!flyToRequest || !mapRef.current) return;
@@ -145,12 +193,12 @@ export default function MapComponent() {
           }
         }}
         style={{ width: "100%", height: "100%" }}
-        mapStyle="mapbox://styles/mapbox/dark-v11"
+        mapStyle={mapStyle === "satellite" ? "mapbox://styles/mapbox/satellite-v9" : "mapbox://styles/mapbox/dark-v11"}
         mapboxAccessToken={MAPBOX_TOKEN}
         attributionControl={false}
         onError={(e) => console.error("Mapbox Error:", e)}
       >
-        {activeDataUrl && (
+        {activeDataUrl && isLayerVisible && (
           <Source id="sf-features" type="geojson" data={activeDataUrl}>
             <Layer
               id="sf-fill"
@@ -169,8 +217,18 @@ export default function MapComponent() {
                   1,
                   "#00c853",
                 ],
-                "fill-opacity": 0.5,
+                "fill-opacity": [
+                  "case",
+                  ["boolean", ["get", "active_filter_match"], true],
+                  0.5,
+                  0.1
+                ],
               }}
+              filter={
+                activeFilter
+                  ? createMapboxFilter(activeFilter)
+                  : ["all"]
+              }
             />
             <Layer
               id="sf-outline"
