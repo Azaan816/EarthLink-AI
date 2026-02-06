@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { MapChatProvider } from "@/context/MapChatContext";
 import { TamboAIProvider } from "@/providers/TamboProvider";
 
 const geistSans = Geist({
@@ -28,9 +29,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <TamboAIProvider>
-          {children}
-        </TamboAIProvider>
+        <MapChatProvider>
+          <TamboAIProvider>
+            {children}
+          </TamboAIProvider>
+        </MapChatProvider>
       </body>
     </html>
   );

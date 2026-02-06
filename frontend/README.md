@@ -14,7 +14,9 @@ pnpm dev
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your browser.
+
+**EarthLink AI:** Map is centered on San Francisco. Click a point on the map, then use **"Ask about this"** in the chat for environmental insight. Run the backend for insight API: `cd backend && uvicorn main:app --reload`. Set `NEXT_PUBLIC_BACKEND_URL=http://localhost:8000` in `.env.local`. For best AI verbalization, add `src/lib/geo-system-prompt.txt` to your Tambo project system prompt.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
