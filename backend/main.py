@@ -1,19 +1,40 @@
-import os
 import json
-import shutil
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from geo_utils import bbox_intersects, get_polygon_ring, point_in_polygon, ring_bbox, ring_center
 
 # Initialize FastAPI
 app = FastAPI(title="EarthLink AI - Python MCP Server")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Constants
-# We assume the frontend public directory is accessible relative to this backend
-# Adjust this path based on actual deployment/project structure
-FRONTEND_PUBLIC_DATA_DIR = Path("../frontend/public/data")
+FRONTEND_PUBLIC_DATA_DIR = Path(__file__).resolve().parent.parent / "frontend" / "public" / "data"
+SF_FEATURES_PATH = FRONTEND_PUBLIC_DATA_DIR / "sf" / "features.geojson"
+
+# Cached SF GeoJSON (loaded on first insight request)
+_sf_geojson: Optional[Dict[str, Any]] = None
+
+
+def get_sf_features() -> List[Dict[str, Any]]:
+    global _sf_geojson
+    if _sf_geojson is None:
+        if not SF_FEATURES_PATH.exists():
+            raise HTTPException(status_code=503, detail="SF features GeoJSON not found. Ensure public/data/sf/features.geojson exists.")
+        with open(SF_FEATURES_PATH, "r") as f:
+            _sf_geojson = json.load(f)
+    features = _sf_geojson.get("features") or []
+    return features
 
 class Server:
     """
@@ -138,6 +159,137 @@ async def call_tool_endpoint(request: ToolCallRequest):
         raise HTTPException(status_code=404, detail=f"Tool {request.name} not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Insight endpoints (San Francisco GeoJSON) ---
+
+
+class PointInsightRequest(BaseModel):
+    longitude: float
+    latitude: float
+
+
+class RegionInsightRequest(BaseModel):
+    bbox: Optional[List[float]] = None  # [min_lng, min_lat, max_lng, max_lat]
+    feature_id: Optional[str] = None
+
+
+class FindExtremeRequest(BaseModel):
+    metric: str  # e.g. heat_score, green_score, lst, ndvi
+    mode: str = "max"  # "max" or "min"
+    top_n: int = 1  # return top N features
+
+
+@app.post("/insight/point")
+async def insight_point(req: PointInsightRequest):
+    """Return the SF grid cell properties at the given point (point-in-polygon)."""
+    features = get_sf_features()
+    for f in features:
+        ring = get_polygon_ring(f)
+        if ring and point_in_polygon(req.longitude, req.latitude, ring):
+            props = f.get("properties") or {}
+            return {"status": "success", "feature_id": f.get("id"), "properties": props}
+    return {"status": "not_found", "message": "No grid cell contains this point (outside SF data extent)."}
+
+
+@app.post("/insight/region")
+async def insight_region(req: RegionInsightRequest):
+    """Return features in bbox or the single feature by id. For bbox, returns list of properties + optional aggregates."""
+    features = get_sf_features()
+    if req.feature_id is not None:
+        for f in features:
+            if str(f.get("id")) == str(req.feature_id):
+                return {"status": "success", "feature": f.get("properties"), "feature_id": req.feature_id}
+        raise HTTPException(status_code=404, detail=f"Feature id {req.feature_id} not found")
+    if req.bbox is not None:
+        if len(req.bbox) != 4:
+            raise HTTPException(status_code=400, detail="bbox must be [min_lng, min_lat, max_lng, max_lat]")
+        matching = []
+        for f in features:
+            ring = get_polygon_ring(f)
+            if ring and bbox_intersects(req.bbox, ring):
+                matching.append({"id": f.get("id"), "properties": f.get("properties") or {}})
+        # Simple aggregates
+        if not matching:
+            return {"status": "success", "features": [], "count": 0, "aggregates": {}}
+        keys = [
+            "ndvi", "evi", "ndbi", "bsi", "lst",
+            "green_score", "heat_score", "fog_score",
+            "elevation", "slope", "night_lights",
+        ]
+        agg: Dict[str, Any] = {}
+        for k in keys:
+            vals = [m["properties"].get(k) for m in matching if m["properties"].get(k) is not None]
+            if vals:
+                agg[f"{k}_mean"] = round(sum(vals) / len(vals), 4)
+                agg[f"{k}_min"] = round(min(vals), 4)
+                agg[f"{k}_max"] = round(max(vals), 4)
+        n = len(matching)
+        return {
+            "status": "success",
+            "features": matching,
+            "count": n,
+            "aggregates": agg,
+            "hint": f"Region contains {n} grid cells. Use aggregates (e.g. ndvi_mean, green_score_mean, heat_score_max) to describe vegetation, heat, and built-up intensity. Prefer InsightCard, MetricsTable, RegionSummaryCard, and KeyTakeaways for detailed UI.",
+        }
+    raise HTTPException(status_code=400, detail="Provide either bbox or feature_id")
+
+
+ALLOWED_FIND_METRICS = {
+    "heat_score", "green_score", "lst", "ndvi", "evi", "ndbi", "bsi",
+    "fog_score", "elevation", "slope", "night_lights",
+}
+
+
+@app.post("/insight/find")
+async def find_extreme(req: FindExtremeRequest):
+    """Find the cell(s) with highest or lowest value for a metric (e.g. hottest, greenest)."""
+    if req.metric not in ALLOWED_FIND_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"metric must be one of: {sorted(ALLOWED_FIND_METRICS)}",
+        )
+    if req.mode not in ("max", "min"):
+        raise HTTPException(status_code=400, detail="mode must be 'max' or 'min'")
+    if req.top_n < 1 or req.top_n > 20:
+        raise HTTPException(status_code=400, detail="top_n must be 1–20")
+
+    features = get_sf_features()
+    candidates: List[Dict[str, Any]] = []
+    for f in features:
+        props = f.get("properties") or {}
+        val = props.get(req.metric)
+        if val is None:
+            continue
+        try:
+            v = float(val)
+        except (TypeError, ValueError):
+            continue
+        ring = get_polygon_ring(f)
+        if not ring:
+            continue
+        center = ring_center(ring)
+        bbox = ring_bbox(ring)
+        candidates.append({
+            "feature_id": f.get("id"),
+            "value": round(v, 4),
+            "center": {"longitude": center[0], "latitude": center[1]},
+            "bbox": bbox,
+            "properties": props,
+        })
+    if not candidates:
+        return {"status": "not_found", "message": f"No features with metric '{req.metric}'."}
+
+    candidates.sort(key=lambda x: x["value"], reverse=(req.mode == "max"))
+    top = candidates[: req.top_n]
+    return {
+        "status": "success",
+        "metric": req.metric,
+        "mode": req.mode,
+        "results": top,
+        "hint": "Use show_on_map with the first result's center (longitude, latitude) to show a pin, or bbox to highlight the area.",
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
