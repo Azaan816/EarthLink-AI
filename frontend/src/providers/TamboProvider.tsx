@@ -7,11 +7,71 @@ import { useMapChat } from "@/context/MapChatContext";
 import { useLayoutDispatch } from "@/context/LayoutContext";
 import { fetchPointInsight, fetchRegionInsight, fetchFindExtreme, fetchProximity, fetchComparison, fetchTemporalTrend } from "@/lib/insight-api";
 import InsightCard from "@/components/InsightCard";
-import MetricsTable from "@/components/MetricsTable";
+import MetricsTable, { MetricsTableContent } from "@/components/MetricsTable";
 import KeyTakeaways from "@/components/KeyTakeaways";
 import RegionSummaryCard from "@/components/RegionSummaryCard";
 import ComparisonTable, { ComparisonTableContent } from "@/components/ComparisonTable";
 import GrowthChart from "@/components/GrowthChart";
+
+/** Convert backend properties/aggregates to MetricsTable metrics array */
+function propsToMetrics(props: Record<string, unknown> | null | undefined): Array<{ label: string; value: string | number }> {
+  if (!props || typeof props !== "object") return [];
+  const LABELS: Record<string, string> = {
+    ndvi: "NDVI",
+    evi: "EVI",
+    ndbi: "NDBI",
+    bsi: "BSI",
+    lst: "Land surface temp (LST)",
+    heat_score: "Heat score",
+    green_score: "Green score",
+    fog_score: "Fog score",
+    elevation: "Elevation (m)",
+    slope: "Slope (°)",
+    night_lights: "Night lights",
+  };
+  const order = ["heat_score", "lst", "green_score", "ndvi", "evi", "ndbi", "bsi", "fog_score", "elevation", "slope", "night_lights"];
+  const seen = new Set<string>();
+  const result: Array<{ label: string; value: string | number }> = [];
+  for (const k of order) {
+    const v = props[k];
+    if (v == null) continue;
+    seen.add(k);
+    const label = LABELS[k] ?? k.replace(/_/g, " ");
+    result.push({ label, value: typeof v === "number" ? v : String(v) });
+  }
+  for (const k of Object.keys(props)) {
+    if (seen.has(k)) continue;
+    const v = props[k];
+    if (v == null || typeof v === "object") continue;
+    result.push({ label: k.replace(/_/g, " "), value: typeof v === "number" ? v : String(v) });
+  }
+  return result;
+}
+
+/** Convert region aggregates (ndvi_mean etc) to metrics for single-location display */
+function aggregatesToMetrics(agg: Record<string, unknown> | null | undefined): Array<{ label: string; value: string | number }> {
+  if (!agg || typeof agg !== "object") return [];
+  const LABELS: Record<string, string> = {
+    ndvi: "NDVI",
+    evi: "EVI",
+    lst: "LST",
+    heat_score: "Heat score",
+    green_score: "Green score",
+    fog_score: "Fog score",
+    elevation: "Elevation",
+    slope: "Slope",
+    night_lights: "Night lights",
+  };
+  const result: Array<{ label: string; value: string | number }> = [];
+  for (const [key, v] of Object.entries(agg)) {
+    if (v == null) continue;
+    const base = key.replace(/_mean$|_min$|_max$/, "");
+    const suffix = key.endsWith("_mean") ? " (mean)" : key.endsWith("_min") ? " (min)" : key.endsWith("_max") ? " (max)" : "";
+    const label = (LABELS[base] ?? base.replace(/_/g, " ")) + suffix;
+    result.push({ label, value: typeof v === "number" ? v : String(v) });
+  }
+  return result;
+}
 
 const components: TamboComponent[] = [
   {
@@ -143,6 +203,16 @@ function useMapChatTools() {
           lat = selectedPoint.lat;
         }
         const data = await fetchPointInsight(lng, lat);
+        if (data && data.status === "success" && data.properties) {
+          const metrics = propsToMetrics(data.properties);
+          if (metrics.length > 0) {
+            setLeftSidebarContent(
+              <MetricsTableContent title="Location Metrics" metrics={metrics} />,
+              { keepAlt: true }
+            );
+            openLeftSidebar();
+          }
+        }
         return data;
       },
     });
@@ -177,6 +247,21 @@ function useMapChatTools() {
           return { error: "No region or point selected. Ask the user to click a point or draw a region on the map, or provide bbox or feature_id." };
         }
         const data = await fetchRegionInsight({ bbox: useBbox ?? undefined, feature_id: useFeatureId ?? undefined });
+        if (data && data.status === "success") {
+          let metrics: Array<{ label: string; value: string | number }> = [];
+          if (data.feature) {
+            metrics = propsToMetrics(data.feature);
+          } else if (data.aggregates) {
+            metrics = aggregatesToMetrics(data.aggregates);
+          }
+          if (metrics.length > 0) {
+            setLeftSidebarContent(
+              <MetricsTableContent title="Region Metrics" metrics={metrics} />,
+              { keepAlt: true }
+            );
+            openLeftSidebar();
+          }
+        }
         return data;
       },
     });
@@ -235,7 +320,8 @@ USAGE AFTER find_extreme (multiple results):
       tool: ({ longitude, latitude, bbox, zoom, locations }) => {
         if (locations && locations.length > 0) {
           const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
-          for (const loc of locations as Array<{ longitude?: number; latitude?: number; bbox?: number[] }>) {
+          for (const loc of locations as Array<{ longitude?: number; latitude?: number; bbox?: number[] } | null>) {
+            if (!loc) continue;
             if (loc.bbox && loc.bbox.length === 4) {
               highlights.push({ type: "bbox", bbox: [loc.bbox[0], loc.bbox[1], loc.bbox[2], loc.bbox[3]] as [number, number, number, number] });
             } else if (loc.longitude != null && loc.latitude != null) {
@@ -468,6 +554,7 @@ IMPORTANT - targets can be place names (geocoded automatically):
       }),
       outputSchema: z.any(),
       tool: async ({ targets, add_extreme, metricsToShow }) => {
+        console.log("compareLocations tool called", { targets, add_extreme, metricsToShow });
         let rawTargets = targets || [];
         const finalTargets: Array<{ feature_id?: string; longitude?: number; latitude?: number }> = [];
 
@@ -546,9 +633,12 @@ IMPORTANT - targets can be place names (geocoded automatically):
         if (finalTargets.length === 0) return { error: "No valid locations to compare. Pass place names (e.g. 'Sunset District', 'Glen Park') in targets, click a point on the map and use 'selected', or provide coordinates as 'point:lng,lat'." };
 
         const response = await fetchComparison(finalTargets);
+        console.log("fetchComparison response", response);
 
         // Extract comparison array from backend
+        // Use a more robust check for response structure
         const comparison = (response && response.comparison) ? response.comparison : (Array.isArray(response) ? response : []);
+        console.log("Extracted comparison data", comparison);
 
         // Directly update Analysis sidebar with graphs when comparison data exists
         if (comparison && comparison.length > 0) {
@@ -556,13 +646,24 @@ IMPORTANT - targets can be place names (geocoded automatically):
             if (!c || !c.metrics || typeof c.metrics !== 'object' || Array.isArray(c.metrics)) return false;
             return Object.keys(c.metrics).length > 0;
           });
+          console.log("Detailed comparison validation", { rawCount: comparison.length, validCount: safe.length, rawData: comparison, safeData: safe });
+
           if (safe.length > 0) {
             const metrics = metricsToShow && metricsToShow.length > 0 ? metricsToShow : (add_extreme ? (add_extreme.metric === "lst" ? ["LST", "Heat Score", "Green Score"] : add_extreme.metric === "green_score" ? ["Green Score", "NDVI", "LST"] : undefined) : undefined);
+            // Key forces React to re-mount when comparison changes (fixes sidebar not updating on new compare prompts)
+            const comparisonKey = safe.map((c: { id?: string; label?: string }) => `${c?.id ?? ''}-${c?.label ?? ''}`).join('|');
+
+            console.log("Updating LeftSidebar with ComparisonTableContent", { metrics, comparisonKey });
+
             setLeftSidebarContent(
-              <ComparisonTableContent title="Location Comparison" comparison={safe} metricsToShow={metrics} />
+              <ComparisonTableContent key={comparisonKey} title="Location Comparison" comparison={safe} metricsToShow={metrics} />
             );
             openLeftSidebar();
+          } else {
+             console.warn("No valid comparison data found after filtering (safe array empty).");
           }
+        } else {
+             console.warn("Comparison data is empty or invalid.", comparison);
         }
 
         return comparison;

@@ -40,7 +40,7 @@ function toNum(v: string | number | null | undefined): number | null {
   return isNaN(n) ? null : n;
 }
 
-function MetricsTableContent({ title, headers, rows, metrics, metricsToShow }: MetricsTableProps) {
+export function MetricsTableContent({ title, headers, rows, metrics, metricsToShow }: MetricsTableProps) {
   const safeTitle = title ?? "Metrics";
   const safeMetrics = metrics ?? [];
   const hasKeyValue = safeMetrics.length > 0;
@@ -50,9 +50,25 @@ function MetricsTableContent({ title, headers, rows, metrics, metricsToShow }: M
 
   // Detect comparison table: first column = metric labels, rest = location values. Show charts whenever we have 1+ location columns with numeric data.
   const metricKey = safeHeaders[0] || "Metric";
-  const locationKeys = safeHeaders.slice(1);
+  let locationKeys = safeHeaders.slice(1);
   const hasNumericData = safeRows.some(r => locationKeys.some(k => toNum(r?.[k]) != null));
   const isComparison = hasTable && locationKeys.length >= 1 && hasNumericData;
+
+  // Single-location: metrics array with numeric values → show charts (bar, radar, line)
+  const SINGLE_LOCATION_LABEL = "This location";
+  const singleMetricsWithNums = safeMetrics
+    .filter(m => toNum(m?.value) != null)
+    .map(m => ({ label: String(m?.label ?? "").replace(/_/g, ' '), value: toNum(m?.value) ?? 0 }));
+  let singleMetricsFiltered = singleMetricsWithNums;
+  if (metricsToShow && metricsToShow.length > 0) {
+    const wanted = metricsToShow.map(m => m.trim().toLowerCase().replace(/\s+/g, ' '));
+    const filtered = singleMetricsWithNums.filter(m => {
+      const norm = m.label.toLowerCase();
+      return wanted.some(w => norm === w || norm.includes(w) || w.includes(norm));
+    });
+    if (filtered.length > 0) singleMetricsFiltered = filtered;
+  }
+  const isSingleLocation = hasKeyValue && singleMetricsFiltered.length > 0;
 
   if (metricsToShow && metricsToShow.length > 0 && isComparison) {
     const wanted = metricsToShow.map(m => m.trim().toLowerCase().replace(/\s+/g, ' '));
@@ -63,26 +79,42 @@ function MetricsTableContent({ title, headers, rows, metrics, metricsToShow }: M
     if (filtered.length > 0) safeRows = filtered;
   }
 
-  // Build chart data from comparison table
-  const barChartData = isComparison ? safeRows.map(row => {
-    const out: Record<string, string | number> = { metric: String(row?.[metricKey] ?? "").replace(/_/g, ' ') };
-    locationKeys.forEach((k) => { out[k] = toNum(row?.[k]) ?? 0; });
-    return out;
-  }) : [];
+  // Build chart data from comparison table or single-location metrics
+  const barChartData = isComparison
+    ? safeRows.map(row => {
+        const out: Record<string, string | number> = { metric: String(row?.[metricKey] ?? "").replace(/_/g, ' ') };
+        locationKeys.forEach((k) => { out[k] = toNum(row?.[k]) ?? 0; });
+        return out;
+      })
+    : isSingleLocation
+      ? singleMetricsFiltered.map(m => ({ metric: m.label, [SINGLE_LOCATION_LABEL]: m.value }))
+      : [];
 
-  const radarData = isComparison ? safeRows.map(row => {
-    const out: Record<string, string | number> = { subject: String(row?.[metricKey] ?? "").replace(/_/g, ' ') };
-    locationKeys.forEach(k => { out[k] = toNum(row?.[k]) ?? 0; });
-    return out;
-  }) : [];
+  const radarData = isComparison
+    ? safeRows.map(row => {
+        const out: Record<string, string | number> = { subject: String(row?.[metricKey] ?? "").replace(/_/g, ' ') };
+        locationKeys.forEach(k => { out[k] = toNum(row?.[k]) ?? 0; });
+        return out;
+      })
+    : isSingleLocation
+      ? singleMetricsFiltered.map(m => ({ subject: m.label, [SINGLE_LOCATION_LABEL]: m.value }))
+      : [];
 
-  const lineChartData = isComparison ? safeRows.map(row => {
-    const out: Record<string, string | number> = { name: String(row?.[metricKey] ?? "").replace(/_/g, ' ') };
-    locationKeys.forEach(k => { out[k] = toNum(row?.[k]) ?? 0; });
-    return out;
-  }) : [];
+  const lineChartData = isComparison
+    ? safeRows.map(row => {
+        const out: Record<string, string | number> = { name: String(row?.[metricKey] ?? "").replace(/_/g, ' ') };
+        locationKeys.forEach(k => { out[k] = toNum(row?.[k]) ?? 0; });
+        return out;
+      })
+    : isSingleLocation
+      ? singleMetricsFiltered.map(m => ({ name: m.label, [SINGLE_LOCATION_LABEL]: m.value }))
+      : [];
 
-  const chartColors = CHART_COLORS.slice(0, locationKeys.length);
+  if (isSingleLocation && locationKeys.length === 0) {
+    locationKeys = [SINGLE_LOCATION_LABEL];
+  }
+  const showCharts = (isComparison || isSingleLocation) && barChartData.length > 0;
+  const chartColors = CHART_COLORS.slice(0, Math.max(locationKeys.length, 1));
 
   return (
     <div className="flex flex-col h-full bg-gray-900 text-white">
@@ -90,8 +122,8 @@ function MetricsTableContent({ title, headers, rows, metrics, metricsToShow }: M
         <h3 className="font-bold text-xl text-emerald-400">{safeTitle}</h3>
       </div>
       <div className="p-4 overflow-auto custom-scrollbar space-y-6">
-        {/* Comparison charts - show when table is a comparison format */}
-        {isComparison && barChartData.length > 0 && (
+        {/* Charts - show for comparison or single-location metrics */}
+        {showCharts && (
           <>
             <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
               <h4 className="text-sm font-semibold text-emerald-400 mb-3">Metric Comparison (Bar Chart)</h4>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, ReactNode } from "react";
+import React, { createContext, useContext, useReducer, ReactNode, useMemo } from "react";
 
 interface LayoutState {
     isLeftSidebarOpen: boolean;
@@ -19,42 +19,63 @@ interface LayoutDispatch {
 const LayoutStateContext = createContext<LayoutState | undefined>(undefined);
 const LayoutDispatchContext = createContext<LayoutDispatch | undefined>(undefined);
 
-export function LayoutProvider({ children }: { children: ReactNode }) {
-    const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
-    const [leftSidebarContent, setLeftSidebarContentState] = useState<ReactNode | null>(null);
-    const [leftSidebarAltContent, setLeftSidebarAltContent] = useState<ReactNode | null>(null);
+type Action =
+    | { type: 'OPEN' }
+    | { type: 'CLOSE' }
+    | { type: 'SET_CONTENT'; content: ReactNode; keepAlt?: boolean }
+    | { type: 'TOGGLE' };
 
-    const openLeftSidebar = React.useCallback(() => setIsLeftSidebarOpen(true), []);
-    const closeLeftSidebar = React.useCallback(() => setIsLeftSidebarOpen(false), []);
-
-    const setLeftSidebarContent = React.useCallback((content: ReactNode, options?: { keepAlt?: boolean }) => {
-        setLeftSidebarContentState((prev) => {
-            if (options?.keepAlt && prev) {
-                setLeftSidebarAltContent(prev);
-            } else if (!options?.keepAlt) {
-                setLeftSidebarAltContent(null);
+function layoutReducer(state: LayoutState, action: Action): LayoutState {
+    switch (action.type) {
+        case 'OPEN':
+            return { ...state, isLeftSidebarOpen: true };
+        case 'CLOSE':
+            return { ...state, isLeftSidebarOpen: false };
+        case 'SET_CONTENT': {
+            let newAlt = state.leftSidebarAltContent;
+            if (action.keepAlt) {
+                if (state.leftSidebarContent) {
+                    newAlt = state.leftSidebarContent;
+                }
+            } else {
+                newAlt = null;
             }
-            return content;
-        });
+            return {
+                ...state,
+                leftSidebarContent: action.content,
+                leftSidebarAltContent: newAlt,
+            };
+        }
+        case 'TOGGLE': {
+            if (state.leftSidebarAltContent) {
+                return {
+                    ...state,
+                    leftSidebarContent: state.leftSidebarAltContent,
+                    leftSidebarAltContent: state.leftSidebarContent,
+                };
+            }
+            return state;
+        }
+        default:
+            return state;
+    }
+}
+
+export function LayoutProvider({ children }: { children: ReactNode }) {
+    const [state, dispatch] = useReducer(layoutReducer, {
+        isLeftSidebarOpen: false,
+        leftSidebarContent: null,
+        leftSidebarAltContent: null,
+    });
+
+    const openLeftSidebar = React.useCallback(() => dispatch({ type: 'OPEN' }), []);
+    const closeLeftSidebar = React.useCallback(() => dispatch({ type: 'CLOSE' }), []);
+    const setLeftSidebarContent = React.useCallback((content: ReactNode, options?: { keepAlt?: boolean }) => {
+        dispatch({ type: 'SET_CONTENT', content, keepAlt: options?.keepAlt });
     }, []);
+    const toggleSidebarView = React.useCallback(() => dispatch({ type: 'TOGGLE' }), []);
 
-    const toggleSidebarView = React.useCallback(() => {
-        setLeftSidebarContentState((prev) => {
-            setLeftSidebarAltContent((alt) => {
-                if (alt != null) setLeftSidebarContentState(alt);
-                return prev;
-            });
-            return prev;
-        });
-    }, []);
-
-    const stateValue = React.useMemo(() => ({
-        isLeftSidebarOpen,
-        leftSidebarContent,
-        leftSidebarAltContent,
-    }), [isLeftSidebarOpen, leftSidebarContent, leftSidebarAltContent]);
-
-    const dispatchValue = React.useMemo(() => ({
+    const dispatchValue = useMemo(() => ({
         openLeftSidebar,
         closeLeftSidebar,
         setLeftSidebarContent,
@@ -62,7 +83,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     }), [openLeftSidebar, closeLeftSidebar, setLeftSidebarContent, toggleSidebarView]);
 
     return (
-        <LayoutStateContext.Provider value={stateValue}>
+        <LayoutStateContext.Provider value={state}>
             <LayoutDispatchContext.Provider value={dispatchValue}>
                 {children}
             </LayoutDispatchContext.Provider>
