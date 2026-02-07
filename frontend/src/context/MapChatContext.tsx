@@ -12,6 +12,10 @@ export type SelectedRegion =
   | { type: "bbox"; bbox: [number, number, number, number] }
   | { type: "featureId"; id: string };
 
+export type HighlightedLocation =
+  | { type: "point"; lng: number; lat: number; label?: string }
+  | { type: "bbox"; bbox: [number, number, number, number]; label?: string };
+
 export type SelectionMode = "point" | "region";
 
 export type HeatmapMetric = "heat" | "greenness" | null;
@@ -21,6 +25,8 @@ export interface MapChatState {
   flyToRequest: Viewport | null;
   selectedPoint: { lng: number; lat: number } | null;
   selectedRegion: SelectedRegion | null;
+  /** AI-highlighted locations (multiple points/areas). Use for find_extreme, recommendations, etc. */
+  highlightedLocations: HighlightedLocation[];
   /** When drawing a region, first click sets this; second click completes bbox. */
   bboxCorner1: { lng: number; lat: number } | null;
   selectionMode: SelectionMode;
@@ -44,6 +50,7 @@ const defaultState: MapChatState = {
   flyToRequest: null,
   selectedPoint: null,
   selectedRegion: null,
+  highlightedLocations: [],
   bboxCorner1: null,
   selectionMode: "point",
   activeDataUrl: "/data/sf/features.geojson",
@@ -58,6 +65,7 @@ interface MapChatContextValue extends MapChatState {
   setViewport: (v: Viewport) => void;
   setSelectedPoint: (p: { lng: number; lat: number } | null) => void;
   setSelectedRegion: (r: SelectedRegion | null) => void;
+  setHighlightedLocations: (l: HighlightedLocation[]) => void;
   setBboxCorner1: (p: { lng: number; lat: number } | null) => void;
   setSelectionMode: (m: SelectionMode) => void;
   setActiveDataUrl: (url: string | null) => void;
@@ -77,6 +85,7 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
   const [flyToRequest, setFlyToRequest] = useState<Viewport | null>(null);
   const [selectedPoint, setSelectedPoint] = useState<MapChatState["selectedPoint"]>(defaultState.selectedPoint);
   const [selectedRegion, setSelectedRegion] = useState<MapChatState["selectedRegion"]>(defaultState.selectedRegion);
+  const [highlightedLocations, setHighlightedLocations] = useState<MapChatState["highlightedLocations"]>(defaultState.highlightedLocations);
   const [bboxCorner1, setBboxCorner1] = useState<MapChatState["bboxCorner1"]>(defaultState.bboxCorner1);
   const [selectionMode, setSelectionMode] = useState<SelectionMode>(defaultState.selectionMode);
   const [activeDataUrl, setActiveDataUrl] = useState<string | null>(defaultState.activeDataUrl);
@@ -107,6 +116,7 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
       flyToRequest,
       selectedPoint,
       selectedRegion,
+      highlightedLocations,
       bboxCorner1,
       selectionMode,
       activeDataUrl,
@@ -118,6 +128,7 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
 
       setSelectedPoint,
       setSelectedRegion,
+      setHighlightedLocations,
       setBboxCorner1,
       setSelectionMode,
       setActiveDataUrl,
@@ -129,7 +140,7 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
       clearFlyToRequest,
 
     }),
-    [viewport, flyToRequest, selectedPoint, selectedRegion, bboxCorner1, selectionMode, activeDataUrl, activeFilter, isLayerVisible, heatmapMetric, mapStyle, setViewport, flyTo, clearFlyToRequest]
+    [viewport, flyToRequest, selectedPoint, selectedRegion, highlightedLocations, bboxCorner1, selectionMode, activeDataUrl, activeFilter, isLayerVisible, heatmapMetric, mapStyle, setViewport, flyTo, clearFlyToRequest]
   );
 
 

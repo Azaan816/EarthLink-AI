@@ -5,7 +5,7 @@ import Map, { NavigationControl, Source, Layer } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
 import type { GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { useMapChat } from "@/context/MapChatContext";
+import { useMapChat, type HighlightedLocation } from "@/context/MapChatContext";
 import { MapPin, Square, Layers } from "lucide-react";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
@@ -76,6 +76,77 @@ function createMapboxFilter(filterExpression: string): any[] {
 
 const PULSE_SPEED = 0.5;
 
+function highlightedToGeoJSON(locations: HighlightedLocation[]) {
+  const points: Array<{ type: 'Feature'; properties: { index: number }; geometry: { type: 'Point'; coordinates: [number, number] } }> = [];
+  const polygons: Array<{ type: 'Feature'; properties: { index: number }; geometry: { type: 'Polygon'; coordinates: number[][][] } }> = [];
+  locations.forEach((loc, i) => {
+    if (loc.type === 'point') {
+      points.push({
+        type: 'Feature',
+        properties: { index: i },
+        geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
+      });
+    } else {
+      const [minLng, minLat, maxLng, maxLat] = loc.bbox;
+      polygons.push({
+        type: 'Feature',
+        properties: { index: i },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[minLng, minLat], [maxLng, minLat], [maxLng, maxLat], [minLng, maxLat], [minLng, minLat]]],
+        },
+      });
+    }
+  });
+  return {
+    points: { type: 'FeatureCollection' as const, features: points },
+    polygons: { type: 'FeatureCollection' as const, features: polygons },
+  };
+}
+
+function HighlightedLocationsLayer({ locations }: { locations: HighlightedLocation[] }) {
+  const { points, polygons } = highlightedToGeoJSON(locations);
+  return (
+    <>
+      {points.features.length > 0 && (
+        <Source id="highlighted-points" type="geojson" data={points}>
+          <Layer
+            id="highlighted-points-circle"
+            type="circle"
+            paint={{
+              "circle-radius": 10,
+              "circle-color": "#22d3ee",
+              "circle-stroke-width": 2,
+              "circle-stroke-color": "#fff",
+              "circle-opacity": 0.9,
+            }}
+          />
+        </Source>
+      )}
+      {polygons.features.length > 0 && (
+        <Source id="highlighted-polygons" type="geojson" data={polygons}>
+          <Layer
+            id="highlighted-polygons-fill"
+            type="fill"
+            paint={{
+              "fill-color": "#6366f1",
+              "fill-opacity": 0.2,
+            }}
+          />
+          <Layer
+            id="highlighted-polygons-outline"
+            type="line"
+            paint={{
+              "line-color": "#6366f1",
+              "line-width": 2,
+            }}
+          />
+        </Source>
+      )}
+    </>
+  );
+}
+
 export default function MapComponent() {
   const mapRef = useRef<MapRef>(null);
   const selectedPointRef = useRef<{ lng: number; lat: number } | null>(null);
@@ -84,6 +155,8 @@ export default function MapComponent() {
     flyToRequest,
     selectedPoint,
     selectedRegion,
+    highlightedLocations,
+    setHighlightedLocations,
     bboxCorner1,
     selectionMode,
     setViewport,
@@ -217,6 +290,7 @@ export default function MapComponent() {
         onMove={(evt) => setViewport(evt.viewState)}
         onClick={(evt) => {
           const { lng, lat } = evt.lngLat;
+          setHighlightedLocations([]);
           if (selectionMode === "point") {
             setSelectedPoint({ lng, lat });
             setSelectedRegion(null);
@@ -430,6 +504,9 @@ export default function MapComponent() {
               }}
             />
           </Source>
+        )}
+        {highlightedLocations.length > 0 && (
+          <HighlightedLocationsLayer locations={highlightedLocations} />
         )}
         <NavigationControl position="top-right" />
       </Map>

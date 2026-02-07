@@ -5,12 +5,15 @@ import React, { createContext, useContext, useState, ReactNode } from "react";
 interface LayoutState {
     isLeftSidebarOpen: boolean;
     leftSidebarContent: ReactNode | null;
+    /** Previous content (e.g. graphs) - used for toggle between summary and graphs */
+    leftSidebarAltContent: ReactNode | null;
 }
 
 interface LayoutDispatch {
     openLeftSidebar: () => void;
     closeLeftSidebar: () => void;
-    setLeftSidebarContent: (content: ReactNode) => void;
+    setLeftSidebarContent: (content: ReactNode, options?: { keepAlt?: boolean }) => void;
+    toggleSidebarView: () => void;
 }
 
 const LayoutStateContext = createContext<LayoutState | undefined>(undefined);
@@ -18,23 +21,45 @@ const LayoutDispatchContext = createContext<LayoutDispatch | undefined>(undefine
 
 export function LayoutProvider({ children }: { children: ReactNode }) {
     const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
-    const [leftSidebarContent, setLeftSidebarContent] = useState<ReactNode | null>(null);
+    const [leftSidebarContent, setLeftSidebarContentState] = useState<ReactNode | null>(null);
+    const [leftSidebarAltContent, setLeftSidebarAltContent] = useState<ReactNode | null>(null);
 
     const openLeftSidebar = React.useCallback(() => setIsLeftSidebarOpen(true), []);
     const closeLeftSidebar = React.useCallback(() => setIsLeftSidebarOpen(false), []);
-    // setLeftSidebarContent is already stable from useState, but good to be explicit if we wrapped it. 
-    // Actually setLeftSidebarContent from useState is stable.
+
+    const setLeftSidebarContent = React.useCallback((content: ReactNode, options?: { keepAlt?: boolean }) => {
+        setLeftSidebarContentState((prev) => {
+            if (options?.keepAlt && prev) {
+                setLeftSidebarAltContent(prev);
+            } else if (!options?.keepAlt) {
+                setLeftSidebarAltContent(null);
+            }
+            return content;
+        });
+    }, []);
+
+    const toggleSidebarView = React.useCallback(() => {
+        setLeftSidebarContentState((prev) => {
+            setLeftSidebarAltContent((alt) => {
+                if (alt != null) setLeftSidebarContentState(alt);
+                return prev;
+            });
+            return prev;
+        });
+    }, []);
 
     const stateValue = React.useMemo(() => ({
         isLeftSidebarOpen,
-        leftSidebarContent
-    }), [isLeftSidebarOpen, leftSidebarContent]);
+        leftSidebarContent,
+        leftSidebarAltContent,
+    }), [isLeftSidebarOpen, leftSidebarContent, leftSidebarAltContent]);
 
     const dispatchValue = React.useMemo(() => ({
         openLeftSidebar,
         closeLeftSidebar,
-        setLeftSidebarContent
-    }), [openLeftSidebar, closeLeftSidebar]);
+        setLeftSidebarContent,
+        toggleSidebarView,
+    }), [openLeftSidebar, closeLeftSidebar, setLeftSidebarContent, toggleSidebarView]);
 
     return (
         <LayoutStateContext.Provider value={stateValue}>
