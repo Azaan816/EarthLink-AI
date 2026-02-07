@@ -14,6 +14,8 @@ export type SelectedRegion =
 
 export type SelectionMode = "point" | "region";
 
+export type HeatmapMetric = "heat" | "greenness" | null;
+
 export interface MapChatState {
   viewport: Viewport;
   flyToRequest: Viewport | null;
@@ -25,6 +27,8 @@ export interface MapChatState {
   activeDataUrl: string | null;
   activeFilter: string | null;
   isLayerVisible: boolean;
+  /** Which choropleth to show: heat (heat_score) or greenness (green_score). Null = no heatmap. */
+  heatmapMetric: HeatmapMetric;
   mapStyle: "dark" | "satellite";
 }
 
@@ -45,6 +49,7 @@ const defaultState: MapChatState = {
   activeDataUrl: "/data/sf/features.geojson",
   activeFilter: null,
   isLayerVisible: true,
+  heatmapMetric: null,
   mapStyle: "dark",
 };
 
@@ -58,6 +63,7 @@ interface MapChatContextValue extends MapChatState {
   setActiveDataUrl: (url: string | null) => void;
   setActiveFilter: (filter: string | null) => void;
   setIsLayerVisible: (visible: boolean) => void;
+  setHeatmapMetric: (m: HeatmapMetric) => void;
   setMapStyle: (style: "dark" | "satellite") => void;
   flyTo: (longitude: number, latitude: number, zoom?: number) => void;
 
@@ -76,6 +82,7 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
   const [activeDataUrl, setActiveDataUrl] = useState<string | null>(defaultState.activeDataUrl);
   const [activeFilter, setActiveFilter] = useState<string | null>(defaultState.activeFilter);
   const [isLayerVisible, setIsLayerVisible] = useState<boolean>(defaultState.isLayerVisible);
+  const [heatmapMetric, setHeatmapMetric] = useState<MapChatState["heatmapMetric"]>(defaultState.heatmapMetric);
   const [mapStyle, setMapStyle] = useState<"dark" | "satellite">(defaultState.mapStyle);
 
   const setViewport = useCallback((v: Viewport) => setViewportState(v), []);
@@ -105,6 +112,7 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
       activeDataUrl,
       activeFilter,
       isLayerVisible,
+      heatmapMetric,
       mapStyle,
       setViewport,
 
@@ -115,12 +123,13 @@ export function MapChatProvider({ children }: { children: React.ReactNode }) {
       setActiveDataUrl,
       setActiveFilter,
       setIsLayerVisible,
+      setHeatmapMetric,
       setMapStyle,
       flyTo,
       clearFlyToRequest,
 
     }),
-    [viewport, flyToRequest, selectedPoint, selectedRegion, bboxCorner1, selectionMode, activeDataUrl, activeFilter, isLayerVisible, mapStyle, setViewport, flyTo, clearFlyToRequest]
+    [viewport, flyToRequest, selectedPoint, selectedRegion, bboxCorner1, selectionMode, activeDataUrl, activeFilter, isLayerVisible, heatmapMetric, mapStyle, setViewport, flyTo, clearFlyToRequest]
   );
 
 

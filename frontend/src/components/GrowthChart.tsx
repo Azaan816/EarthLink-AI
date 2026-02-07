@@ -17,11 +17,14 @@ interface GrowthChartProps {
     locationLabel?: string;
 }
 
+const MIN_TREND_POINTS = 2;
+
 // Separate component for the actual chart logic to be reused
 function GrowthChartContent({ title, metric = "Value", trend = [], locationLabel }: GrowthChartProps) {
-    if (!trend || trend.length === 0) {
+    const hasValidTrend = trend && trend.length >= MIN_TREND_POINTS;
+    if (!hasValidTrend) {
         return (
-            <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+            <div className="flex flex-col items-center justify-center h-full p-8 text-center min-h-[300px]">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mb-4"></div>
                 <p className="text-gray-400 text-sm">Analyzing temporal data...</p>
                 <p className="text-gray-500 text-xs mt-2">Generating trend analysis for {metric}</p>
@@ -80,7 +83,8 @@ function GrowthChartContent({ title, metric = "Value", trend = [], locationLabel
                             strokeWidth={3}
                             dot={{ fill: color, strokeWidth: 2, r: 4 }}
                             activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }}
-                            animationDuration={1500}
+                            animationDuration={400}
+                            isAnimationActive={true}
                         />
                     </LineChart>
                 </ResponsiveContainer>
@@ -99,23 +103,27 @@ function GrowthChartContent({ title, metric = "Value", trend = [], locationLabel
 
 export default function GrowthChart(props: GrowthChartProps) {
     const { setLeftSidebarContent, openLeftSidebar } = useLayoutDispatch();
+    const hasValidTrend = props.trend && props.trend.length >= MIN_TREND_POINTS;
 
     useEffect(() => {
-        // Automatically open sidebar and show the chart content
-        setLeftSidebarContent(<GrowthChartContent {...props} />);
-        openLeftSidebar();
+        // Only set sidebar content and open when we have enough trend data to avoid flashing a partial/empty chart
+        if (hasValidTrend) {
+            setLeftSidebarContent(<GrowthChartContent {...props} />);
+            openLeftSidebar();
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [JSON.stringify(props), setLeftSidebarContent, openLeftSidebar]);
+    }, [hasValidTrend, JSON.stringify(props), setLeftSidebarContent, openLeftSidebar]);
 
     return (
-        <div className="bg-gray-800/80 rounded-lg border border-gray-700 p-4 my-2 flex items-center justify-between group hover:bg-gray-800 transition-colors cursor-pointer"
+        <div
+            className="rounded-2xl border border-cyan-500/20 bg-gray-800/90 p-4 my-2 flex items-center justify-between group hover:bg-gray-800 hover:border-cyan-500/40 transition-all duration-200 cursor-pointer shadow-[0_0_0_1px_rgba(34,211,238,0.1)]"
             onClick={() => {
                 setLeftSidebarContent(<GrowthChartContent {...props} />);
                 openLeftSidebar();
             }}
         >
             <div className="flex items-center gap-3">
-                <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-400">
+                <div className="p-2 bg-cyan-500/10 rounded-xl text-cyan-400">
                     <TrendingUp size={20} />
                 </div>
                 <div>
@@ -123,7 +131,7 @@ export default function GrowthChart(props: GrowthChartProps) {
                     <p className="text-xs text-gray-400">View detailed growth chart in sidebar</p>
                 </div>
             </div>
-            <button className="text-gray-500 group-hover:text-emerald-400 transition-colors">
+            <button className="text-gray-500 group-hover:text-cyan-400 transition-colors p-1 rounded-lg">
                 <Maximize2 size={18} />
             </button>
         </div>

@@ -9,6 +9,15 @@ export async function fetchPointInsight(longitude: number, latitude: number) {
     return res.json();
 }
 
+export async function fetchReverseGeocode(longitude: number, latitude: number) {
+    const res = await fetch(`${API_BASE_URL}/insight/reverse-geocode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ longitude, latitude }),
+    });
+    return res.json();
+}
+
 export async function fetchRegionInsight(params: { bbox?: number[]; feature_id?: string }) {
     const res = await fetch(`${API_BASE_URL}/insight/region`, {
         method: "POST",

@@ -3,6 +3,7 @@
 import React, { useRef, useEffect } from "react";
 import Map, { NavigationControl, Source, Layer } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
+import type { GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useMapChat } from "@/context/MapChatContext";
 import { MapPin, Square, Layers } from "lucide-react";
@@ -73,8 +74,11 @@ function createMapboxFilter(filterExpression: string): any[] {
 }
 
 
+const PULSE_SPEED = 0.5;
+
 export default function MapComponent() {
   const mapRef = useRef<MapRef>(null);
+  const selectedPointRef = useRef<{ lng: number; lat: number } | null>(null);
   const {
     viewport,
     flyToRequest,
@@ -90,11 +94,46 @@ export default function MapComponent() {
     activeDataUrl,
     activeFilter,
     isLayerVisible,
+    heatmapMetric,
     mapStyle,
     setMapStyle,
     clearFlyToRequest,
   } = useMapChat();
 
+  const heatmapDataUrl =
+    activeDataUrl && (activeDataUrl.startsWith("http") ? activeDataUrl : (typeof window !== "undefined" ? `${window.location.origin}${activeDataUrl}` : ""));
+  const showHeatmapLayer = isLayerVisible && heatmapMetric && heatmapDataUrl;
+  const rawHeatmapFilter = activeFilter ? createMapboxFilter(activeFilter) : undefined;
+  const heatmapFilter = rawHeatmapFilter && (rawHeatmapFilter[0] !== "all" || rawHeatmapFilter.length > 1) ? rawHeatmapFilter : undefined;
+
+
+  selectedPointRef.current = selectedPoint ?? null;
+
+  // Smooth radiating pulse via requestAnimationFrame (no React re-renders per frame)
+  useEffect(() => {
+    if (!selectedPoint) return;
+    const start = performance.now();
+    let rafId: number;
+    const tick = (now: number) => {
+      const map = mapRef.current?.getMap();
+      const source = map?.getSource("selected-point") as GeoJSONSource | undefined;
+      const pt = selectedPointRef.current;
+      if (!pt || !source) {
+        rafId = requestAnimationFrame(tick);
+        return;
+      }
+      const elapsed = (now - start) / 1000;
+      const pulse = (1 + Math.sin(elapsed * Math.PI * PULSE_SPEED)) / 2;
+      source.setData({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [pt.lng, pt.lat] },
+        properties: { pulse },
+      });
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [selectedPoint]);
 
   useEffect(() => {
     if (!flyToRequest || !mapRef.current) return;
@@ -204,6 +243,56 @@ export default function MapComponent() {
         attributionControl={false}
         onError={(e) => console.error("Mapbox Error:", e)}
       >
+        {showHeatmapLayer && (
+          <Source id="heatmap-data" type="geojson" data={heatmapDataUrl}>
+            <Layer
+              id="heatmap-fill"
+              type="fill"
+              {...(heatmapFilter != null ? { filter: heatmapFilter } : {})}
+              paint={
+                heatmapMetric === "heat"
+                  ? {
+                      "fill-color": [
+                        "interpolate",
+                        ["linear"],
+                        ["coalesce", ["get", "heat_score"], 0],
+                        0, "#1e3a5f",
+                        0.25, "#3b82f6",
+                        0.5, "#fbbf24",
+                        0.75, "#f97316",
+                        1, "#dc2626",
+                      ],
+                      "fill-opacity": [
+                        "case",
+                        [">", ["coalesce", ["get", "heat_score"], 0], 0.01],
+                        0.65,
+                        0,
+                      ],
+                      "fill-outline-color": "rgba(255,255,255,0.15)",
+                    }
+                  : {
+                      "fill-color": [
+                        "interpolate",
+                        ["linear"],
+                        ["coalesce", ["get", "green_score"], 0],
+                        0, "#4b5563",
+                        0.25, "#86efac",
+                        0.5, "#22c55e",
+                        0.75, "#15803d",
+                        1, "#14532d",
+                      ],
+                      "fill-opacity": [
+                        "case",
+                        [">", ["coalesce", ["get", "green_score"], 0], 0.01],
+                        0.65,
+                        0,
+                      ],
+                      "fill-outline-color": "rgba(255,255,255,0.15)",
+                    }
+              }
+            />
+          </Source>
+        )}
         {selectedPoint && (
           <Source
             id="selected-point"
@@ -214,17 +303,84 @@ export default function MapComponent() {
                 type: "Point",
                 coordinates: [selectedPoint.lng, selectedPoint.lat],
               },
-              properties: {},
+              properties: { pulse: 0 },
             }}
           >
+            {/* Outer glow — radiates and fades (blinking) */}
             <Layer
-              id="selected-point-circle"
+              id="selected-point-glow-outer"
               type="circle"
               paint={{
-                "circle-radius": 8,
-                "circle-color": "#10b981",
+                "circle-radius": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "pulse"],
+                  0, 28,
+                  0.5, 38,
+                  1, 28,
+                ],
+                "circle-color": "#22d3ee",
+                "circle-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "pulse"],
+                  0, 0.25,
+                  0.5, 0.5,
+                  1, 0.25,
+                ],
+                "circle-blur": 0.85,
+              }}
+            />
+            {/* Mid glow — pulse */}
+            <Layer
+              id="selected-point-glow-mid"
+              type="circle"
+              paint={{
+                "circle-radius": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "pulse"],
+                  0, 16,
+                  0.5, 22,
+                  1, 16,
+                ],
+                "circle-color": "#22d3ee",
+                "circle-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "pulse"],
+                  0, 0.45,
+                  0.5, 0.7,
+                  1, 0.45,
+                ],
+                "circle-blur": 0.5,
+              }}
+            />
+            {/* Bright core — subtle pulse */}
+            <Layer
+              id="selected-point-glow-core"
+              type="circle"
+              paint={{
+                "circle-radius": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "pulse"],
+                  0, 6,
+                  0.5, 8,
+                  1, 6,
+                ],
+                "circle-color": "#67e8f9",
+                "circle-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "pulse"],
+                  0, 1,
+                  0.5, 0.85,
+                  1, 1,
+                ],
                 "circle-stroke-width": 2,
-                "circle-stroke-color": "#fff",
+                "circle-stroke-color": "#ffffff",
+                "circle-stroke-opacity": 0.9,
               }}
             />
           </Source>

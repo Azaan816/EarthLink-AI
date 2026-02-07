@@ -41,7 +41,7 @@ export default function RegionSummaryCard({
       <h4 className="text-sm font-semibold text-emerald-400">{safeTitle}</h4>
       {safeCount > 0 && (
         <p className="mt-1 text-xs text-gray-500">
-          {safeCount} grid cell{safeCount !== 1 ? "s" : ""} in selected area
+          {safeCount} area{safeCount !== 1 ? "s" : ""} in selected region
         </p>
       )}
       {safeSummary && (

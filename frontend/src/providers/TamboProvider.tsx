@@ -16,11 +16,11 @@ const components: TamboComponent[] = [
   {
     name: "InsightCard",
     description:
-      "Display an environmental or geospatial insight summary. Use when presenting results from get_insight_at_point or get_insight_for_region: show a card with title, optional subtitle (e.g. feature_id), metrics (label-value pairs like NDVI, green_score, lst), and optional summary text.",
+      "Display an environmental or geospatial insight summary. Use when presenting results from get_insight_at_point or get_insight_for_region: show a card with title, optional subtitle (use place name or 'This area'—never feature_id or grid cell id), metrics (label-value pairs like NDVI, green_score, lst), and optional summary text.",
     component: InsightCard,
     propsSchema: z.object({
       title: z.string().optional().default("Environmental insight").describe("Card title"),
-      subtitle: z.string().optional().describe("Optional subtitle, e.g. grid cell id"),
+      subtitle: z.string().optional().describe("Optional subtitle: use place name or 'This area', never internal IDs"),
       metrics: z
         .array(
           z.object({
@@ -60,11 +60,11 @@ const components: TamboComponent[] = [
   {
     name: "RegionSummaryCard",
     description:
-      "Display a summary for a selected region (multiple grid cells). Use when get_insight_for_region returns count and aggregates: show title, cell count, summary text, aggregatePairs (array of { name, value } e.g. ndvi_mean, green_score_max), and optional interpretation.",
+      "Display a summary for a selected region. Use when get_insight_for_region returns count and aggregates: show title, area size (cell count), summary text, aggregatePairs (array of { name, value } e.g. ndvi_mean, green_score_max), and optional interpretation. Do not mention 'grid cells' or internal IDs to the user; say 'area' or 'region'.",
     component: RegionSummaryCard,
     propsSchema: z.object({
       title: z.string().optional().default("Region summary").describe("Card title"),
-      cellCount: z.number().optional().describe("Number of grid cells in the region"),
+      cellCount: z.number().optional().describe("Number of areas in the region (internal; describe to user as 'area size' or similar)"),
       summary: z.string().optional().describe("Short narrative summary of the region"),
       aggregatePairs: z
         .array(z.object({ name: z.string().optional().default(""), value: z.number().optional().default(0) }))
@@ -100,7 +100,7 @@ const components: TamboComponent[] = [
 ];
 
 function useMapChatTools() {
-  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setMapStyle } = useMapChat();
+  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle } = useMapChat();
 
   return useMemo(() => {
     const navigateMap = defineTool({
@@ -122,7 +122,7 @@ function useMapChatTools() {
     const getInsightAtPoint = defineTool({
       name: "get_insight_at_point",
       description:
-        "Get environmental insight at a single POINT (one grid cell). Use only when the user selected a single point (Point mode, one click). Do NOT use when the user drew a rectangular area—use get_insight_for_region instead. Pass longitude/latitude, or omit to use the user's current point selection.",
+        "Get environmental insight at a single point. Use only when the user selected a single point (one click). Do NOT use when the user drew a rectangle—use get_insight_for_region instead. Pass longitude/latitude, or omit to use the user's current point selection. When describing the location to the user, use get_place_name or 'this spot'—never mention feature_id or grid cell id.",
       inputSchema: z.object({
         longitude: z.number().optional().describe("Longitude. Omit to use current map selection."),
         latitude: z.number().optional().describe("Latitude. Omit to use current map selection."),
@@ -144,10 +144,10 @@ function useMapChatTools() {
     const getInsightForRegion = defineTool({
       name: "get_insight_for_region",
       description:
-        "Get environmental insight for an AREA (multiple grid cells). Use this when the user drew a rectangle on the map or asks about 'this area' or 'the selected region'. Omit arguments to use the user's current region selection. Returns cell count and aggregates (mean/min/max across the area)—use this to describe the whole area, not a single cell. Prefer this over get_insight_at_point whenever a rectangular area is selected.",
+        "Get environmental insight for an area. Use when the user drew a rectangle on the map or asks about 'this area' or 'the selected region'. Omit arguments to use the user's current region selection. Returns area size and aggregates (mean/min/max). When telling the user the region name, use get_place_name with a point inside the area—never mention feature_id or grid cell id to the user.",
       inputSchema: z.object({
         bbox: z.array(z.number()).length(4).optional().describe("Bounding box [min_lng, min_lat, max_lng, max_lat]"),
-        feature_id: z.string().optional().describe("Grid cell feature id (e.g. from the SF layer)"),
+        feature_id: z.string().optional().describe("Internal region id; do not expose to user"),
       }),
       outputSchema: z.any(),
       tool: async ({ bbox, feature_id }) => {
@@ -211,7 +211,7 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
       inputSchema: z.object({
         longitude: z.number().optional().describe("Center longitude. Required if bbox not provided. Example: -122.4613"),
         latitude: z.number().optional().describe("Center latitude. Required if bbox not provided. Example: 37.7073"),
-        bbox: z.array(z.number()).length(4).optional().describe("Array [minLng, minLat, maxLng, maxLat]. Get from results[0].bbox after find_extreme or analyze_proximity. Example: [-122.46, 37.70, -122.45, 37.71]. PREFERRED for highlighting grid cells."),
+        bbox: z.array(z.number()).length(4).optional().describe("Array [minLng, minLat, maxLng, maxLat]. Get from results[0].bbox after find_extreme or analyze_proximity. Example: [-122.46, 37.70, -122.45, 37.71]. PREFERRED for highlighting the area."),
         zoom: z.number().min(1).max(18).optional().describe("Map zoom level (default 14 for pin, 12 for area)"),
       }),
       outputSchema: z.object({ success: z.boolean() }),
@@ -258,7 +258,7 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
     const analyzeProximity = defineTool({
       name: "analyze_proximity",
       description:
-        "Find grid cells within a radius of a specific point. Use for 'find greenest spot within 500m' or 'what is near here'. Returns specific matching cells with their distance.",
+        "Find areas within a radius of a specific point. Use for 'find greenest spot within 500m' or 'what is near here'. Returns matching areas with distance. When describing results to the user, use place names or 'this area'—never feature_id or grid cell id.",
       inputSchema: z.object({
         longitude: z.number().optional().describe("Center longitude (defaults to selected point)"),
         latitude: z.number().optional().describe("Center latitude (defaults to selected point)"),
@@ -276,6 +276,49 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
           lat = selectedPoint.lat;
         }
         return await fetchProximity({ longitude: lng, latitude: lat, radius_meters, metric, threshold });
+      },
+    });
+
+    const getPlaceName = defineTool({
+      name: "get_place_name",
+      description:
+        "Get the human-readable name or address for a location (reverse geocoding). Use when the user asks for the name of the place, what this location is called, where is this, what address is this, or the name of the selected point. Pass longitude/latitude or omit to use the user's current point selection.",
+      inputSchema: z.object({
+        longitude: z.number().optional().describe("Longitude. Omit to use current map selection."),
+        latitude: z.number().optional().describe("Latitude. Omit to use current map selection."),
+      }),
+      outputSchema: z.any(),
+      tool: async ({ longitude, latitude }) => {
+        let lng = longitude;
+        let lat = latitude;
+        if (lng == null || lat == null) {
+          if (!selectedPoint) return { error: "No point selected. Click a location on the map first, or provide longitude and latitude." };
+          lng = selectedPoint.lng;
+          lat = selectedPoint.lat;
+        }
+        const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+        if (!mapboxToken) return { status: "error", error: "Mapbox token missing. Set NEXT_PUBLIC_MAPBOX_TOKEN for reverse geocoding.", display_name: null };
+        try {
+          const res = await fetch(
+            `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxToken}&limit=1`
+          );
+          if (!res.ok) return { status: "error", message: `Mapbox API ${res.status}`, display_name: null };
+          const data = await res.json();
+          const features = data.features || [];
+          if (features.length === 0) return { status: "not_found", display_name: null, address: {} };
+          const f = features[0];
+          const placeName = f.place_name || "";
+          const context = f.context || [];
+          const address: Record<string, string> = {};
+          if (f.address) address.address = f.address;
+          context.forEach((c: { id?: string; text?: string }) => {
+            const key = (c.id || "").split(".")[0] || "region";
+            if (c.text && !address[key]) address[key] = c.text;
+          });
+          return { status: "success", display_name: placeName, address };
+        } catch (e) {
+          return { status: "error", message: String(e), display_name: null };
+        }
       },
     });
 
@@ -338,6 +381,28 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
         if (layer_visible !== undefined) setIsLayerVisible(layer_visible);
         if (map_style !== undefined) setMapStyle(map_style);
         return { success: true };
+      },
+    });
+
+    const visualizeHeatmap = defineTool({
+      name: "visualize_heatmap",
+      description:
+        "Show or hide a heatmap (choropleth) layer on the map. Use when the user asks to visualize heat, temperature, greenness, or vegetation on the map. Choose 'heat' for land surface heat (red = hot, blue = cool) or 'greenness' for vegetation (green scale). Call with visible: true and the chosen metric to show; use visible: false or metric: null to hide.",
+      inputSchema: z.object({
+        metric: z.enum(["heat", "greenness"]).optional().describe("'heat' = heat/temperature layer (warm colors), 'greenness' = vegetation layer (green colors). Omit to hide heatmap."),
+        visible: z.boolean().optional().describe("True to show the heatmap layer, false to hide. Default true when metric is provided."),
+      }),
+      outputSchema: z.object({ success: z.boolean(), message: z.string().optional() }),
+      tool: ({ metric, visible }) => {
+        const show = visible !== false;
+        if (metric) {
+          setHeatmapMetric(metric);
+          setIsLayerVisible(show);
+          return { success: true, message: `Heatmap set to ${metric} (${show ? "visible" : "hidden"}).` };
+        }
+        setHeatmapMetric(null);
+        setIsLayerVisible(show);
+        return { success: true, message: "Heatmap layer turned off." };
       },
     });
 
@@ -443,7 +508,7 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
           return {
             trend: response.trend,
             metric: response.metric || metric,
-            locationLabel: response.location_id ? `Grid Cell ${response.location_id}` : undefined,
+            locationLabel: undefined,
             title: `${metric.toUpperCase()} Trend Over Time`
           };
         }
@@ -452,8 +517,8 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
       }
     });
 
-    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, searchPlaces, toggleMapLayer, compareLocations, analyzeTemporalTrends];
-  }, [flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setMapStyle]);
+    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, getPlaceName, searchPlaces, toggleMapLayer, visualizeHeatmap, compareLocations, analyzeTemporalTrends];
+  }, [flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle]);
 }
 
 

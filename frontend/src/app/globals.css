@@ -3,6 +3,8 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --glow-cyan: 34 211 238;
+  --glow-teal: 20 184 166;
 }
 
 @theme inline {
@@ -23,4 +25,15 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Hyper-futuristic chat glow */
+.chat-glow {
+  box-shadow: 0 0 0 1px rgb(var(--glow-cyan) / 0.2), 0 0 20px rgb(var(--glow-cyan) / 0.15);
+}
+.chat-glow-strong {
+  box-shadow: 0 0 0 1px rgb(var(--glow-cyan) / 0.4), 0 0 24px rgb(var(--glow-cyan) / 0.25);
+}
+.input-glow:focus {
+  box-shadow: 0 0 0 2px rgb(var(--glow-cyan) / 0.5), 0 0 20px rgb(var(--glow-cyan) / 0.2);
 }

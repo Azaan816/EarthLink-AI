@@ -1,12 +1,17 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from geo_utils import bbox_intersects, get_polygon_ring, point_in_polygon, ring_bbox, ring_center, haversine_distance
+
+# Reverse geocoding: Mapbox Geocoding API v5 only
+MAPBOX_REVERSE_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places"
 
 # Initialize FastAPI
 app = FastAPI(title="EarthLink AI - Python MCP Server")
@@ -130,6 +135,61 @@ mcp_server.register_tool(
     }
 )
 
+
+def _reverse_geocode_mapbox(longitude: float, latitude: float, token: str) -> Dict[str, Any]:
+    """Reverse geocoding via Mapbox Geocoding API v5 (current, no 403)."""
+    try:
+        url = f"{MAPBOX_REVERSE_URL}/{longitude},{latitude}.json"
+        resp = requests.get(url, params={"access_token": token}, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        features = data.get("features") or []
+        if not features:
+            return {"status": "not_found", "display_name": None, "address": {}}
+        f = features[0]
+        place_name = f.get("place_name") or ""
+        context = f.get("context") or []
+        address: Dict[str, Any] = {}
+        if f.get("address"):
+            address["address"] = f["address"]
+        for c in context:
+            key = (c.get("id") or "region").split(".")[0]
+            if c.get("text") and key and not address.get(key):
+                address[key] = c["text"]
+        return {
+            "status": "success",
+            "display_name": place_name,
+            "address": address,
+        }
+    except requests.RequestException as e:
+        return {"status": "error", "message": str(e), "display_name": None}
+
+
+async def reverse_geocode(longitude: float, latitude: float) -> Dict[str, Any]:
+    """
+    Convert coordinates to a human-readable place name or address using Mapbox Geocoding API v5.
+    Requires MAPBOX_ACCESS_TOKEN or NEXT_PUBLIC_MAPBOX_TOKEN in the environment.
+    """
+    mapbox_token = os.environ.get("MAPBOX_ACCESS_TOKEN") or os.environ.get("NEXT_PUBLIC_MAPBOX_TOKEN")
+    if not mapbox_token:
+        return {"status": "error", "message": "Mapbox token not set. Set MAPBOX_ACCESS_TOKEN or NEXT_PUBLIC_MAPBOX_TOKEN.", "display_name": None}
+    return _reverse_geocode_mapbox(longitude, latitude, mapbox_token)
+
+
+mcp_server.register_tool(
+    name="reverse_geocode",
+    func=reverse_geocode,
+    description="Get the human-readable place name or address for a location (latitude/longitude). Use when the user asks for the name of the place, what this location is called, where is this, or the address of the selected point.",
+    schema={
+        "type": "object",
+        "properties": {
+            "longitude": {"type": "number", "description": "Longitude of the point"},
+            "latitude": {"type": "number", "description": "Latitude of the point"},
+        },
+        "required": ["longitude", "latitude"],
+    },
+)
+
 # --- FastAPI Routes ---
 
 @app.get("/")
@@ -169,6 +229,11 @@ class PointInsightRequest(BaseModel):
     latitude: float
 
 
+class ReverseGeocodeRequest(BaseModel):
+    longitude: float
+    latitude: float
+
+
 class RegionInsightRequest(BaseModel):
     bbox: Optional[List[float]] = None  # [min_lng, min_lat, max_lng, max_lat]
     feature_id: Optional[str] = None
@@ -190,6 +255,12 @@ async def insight_point(req: PointInsightRequest):
             props = f.get("properties") or {}
             return {"status": "success", "feature_id": f.get("id"), "properties": props}
     return {"status": "not_found", "message": "No grid cell contains this point (outside SF data extent)."}
+
+
+@app.post("/insight/reverse-geocode")
+async def insight_reverse_geocode(req: ReverseGeocodeRequest):
+    """Return human-readable place name or address for the given coordinates (reverse geocoding)."""
+    return await reverse_geocode(req.longitude, req.latitude)
 
 
 @app.post("/insight/region")
