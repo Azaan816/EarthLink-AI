@@ -269,7 +269,7 @@ function useMapChatTools() {
     const findExtreme = defineTool({
       name: "find_extreme",
       description:
-        "Find location(s) with highest or lowest value for a metric. Use for 'quieter place', 'hottest area', 'greenest spot', 'coolest place'. Set top_n>1 for multiple recommendations. ALWAYS call show_on_map after: with locations array when top_n>1 (to show all on map), or bbox/longitude+latitude when top_n=1.",
+        "Find location(s) with highest or lowest value for a metric (e.g. '3 warmest areas', 'greenest spot'). By default returns only land (excludes ocean/water). Use land_only: false only when the user explicitly asks for water/ocean areas (e.g. 'coolest spots in the ocean'). Returns 'results' and 'compare_targets'. Map is updated automatically. When top_n>1 call compare_locations(targets: response.compare_targets) only.",
       inputSchema: z.object({
         metric: z
           .enum([
@@ -288,32 +288,69 @@ function useMapChatTools() {
           .describe("Metric: heat_score (heat), green_score (greenery), lst (temp), ndvi, etc."),
         mode: z.enum(["max", "min"]).optional().default("max").describe("max = hottest/greenest, min = coolest/least green"),
         top_n: z.number().min(1).max(20).optional().default(1).describe("Return top N locations (1-20, default 1)"),
+        land_only: z.boolean().optional().default(true).describe("True = only land (exclude ocean/water). Set false only when user explicitly asks for water/ocean areas."),
       }),
       outputSchema: z.any(),
-      tool: async ({ metric, mode, top_n }) => {
-        console.log("find_extreme called:", { metric, mode, top_n });
-        const data = await fetchFindExtreme({ metric, mode: mode as "max" | "min", top_n });
+      tool: async ({ metric, mode, top_n, land_only }) => {
+        console.log("find_extreme called:", { metric, mode, top_n, land_only });
+        const data = await fetchFindExtreme({ metric, mode: mode as "max" | "min", top_n, land_only });
         console.log("find_extreme result:", data);
+
+        if (data?.status === "success" && Array.isArray(data.results) && data.results.length > 0) {
+          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
+          let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+          data.results.forEach((r: any) => {
+            if (!r) return;
+            let box: [number, number, number, number] | null = null;
+            let point: { lng: number; lat: number } | null = null;
+            if (r.bbox && Array.isArray(r.bbox) && r.bbox.length === 4) {
+              const b = r.bbox.map(Number) as [number, number, number, number];
+              if (!b.some(isNaN)) box = b;
+            }
+            if (!box && r.center) {
+              const lng = Number(r.center.longitude);
+              const lat = Number(r.center.latitude);
+              if (!isNaN(lng) && !isNaN(lat)) point = { lng, lat };
+            }
+            if (box) {
+              highlights.push({ type: "bbox", bbox: box });
+              minLng = Math.min(minLng, box[0]);
+              minLat = Math.min(minLat, box[1]);
+              maxLng = Math.max(maxLng, box[2]);
+              maxLat = Math.max(maxLat, box[3]);
+            } else if (point) {
+              highlights.push({ type: "point", lng: point.lng, lat: point.lat });
+              minLng = Math.min(minLng, point.lng);
+              minLat = Math.min(minLat, point.lat);
+              maxLng = Math.max(maxLng, point.lng);
+              maxLat = Math.max(maxLat, point.lat);
+            }
+          });
+          if (highlights.length > 0) {
+            setHighlightedLocations(highlights);
+            setSelectedPoint(null);
+            setSelectedRegion(null);
+            const centerLng = (minLng + maxLng) / 2;
+            const centerLat = (minLat + maxLat) / 2;
+            const spread = Math.max(maxLng - minLng, maxLat - minLat);
+            const targetZoom = spread < 0.05 ? 13 : spread < 0.1 ? 12 : 11;
+            flyTo(centerLng, centerLat, targetZoom);
+          }
+        }
+
         return data;
       },
     });
 
     const showOnMap = defineTool({
       name: "show_on_map",
-      description: `Highlight one or more locations on the map. Use for recommendations, find_extreme results, etc.
-
-SINGLE LOCATION: pass bbox OR (longitude, latitude).
-MULTIPLE LOCATIONS: pass locations array - e.g. from find_extreme with top_n>1. Show all recommended areas at once.
-
-USAGE AFTER find_extreme (multiple results):
-- show_on_map(locations: results.map(r => r.bbox ? { bbox: r.bbox } : { longitude: r.center.longitude, latitude: r.center.latitude }))
-- Always show multiple recommended areas on the map when you return 2+ options.`,
+      description: `Highlight one or more locations on the map. Use for a single place or when the user explicitly asks to "show X on map". Do NOT call after find_extreme—find_extreme already plots the regions. Single location: pass bbox OR (longitude, latitude). Multiple: pass locations array with center/bbox.`,
       inputSchema: z.object({
         longitude: z.number().optional(),
         latitude: z.number().optional(),
         bbox: z.array(z.number()).length(4).optional().describe("[minLng, minLat, maxLng, maxLat]"),
         zoom: z.number().min(1).max(18).optional(),
-        locations: z.array(z.any()).optional().describe("Multiple locations to show. Supports find_extreme results (with center/metrics), bbox, or lat/lng objects."),
+        locations: z.array(z.any()).optional().describe("Array of locations. After find_extreme use the exact 'results' array from that response (each has center, bbox, properties)."),
       }),
       outputSchema: z.object({ success: z.boolean() }),
       tool: ({ longitude, latitude, bbox, zoom, locations }) => {
@@ -376,11 +413,15 @@ USAGE AFTER find_extreme (multiple results):
           });
 
           console.log("Setting highlighted locations:", highlights);
-          setHighlightedLocations(highlights);
-          setSelectedPoint(null);
-          setSelectedRegion(null);
-          
-          // Auto-update Sidebar if we have data
+          if (highlights.length > 0) {
+            setHighlightedLocations(highlights);
+            setSelectedPoint(null);
+            setSelectedRegion(null);
+          }
+          if (highlights.length === 0) {
+            return { success: true, message: "Locations already shown (from find_extreme). No change." };
+          }
+
           const hasMetrics = sidebarData.some(d => d.metrics && Object.keys(d.metrics).length > 0);
           if (hasMetrics) {
              console.log("Auto-populating sidebar from show_on_map data", sidebarData);
@@ -395,18 +436,16 @@ USAGE AFTER find_extreme (multiple results):
              openLeftSidebar();
           }
 
-          if (count > 0) {
-            const centerLng = (minLng + maxLng) / 2;
-            const centerLat = (minLat + maxLat) / 2;
-            const spread = Math.max(maxLng - minLng, maxLat - minLat);
-            let targetZoom = zoom ?? 11;
-            if (count === 1) targetZoom = zoom ?? 13;
-            else if (spread < 0.05) targetZoom = 13;
-            else if (spread < 0.1) targetZoom = 12;
-            else targetZoom = 11;
+          const centerLng = (minLng + maxLng) / 2;
+          const centerLat = (minLat + maxLat) / 2;
+          const spread = Math.max(maxLng - minLng, maxLat - minLat);
+          let targetZoom = zoom ?? 11;
+          if (count === 1) targetZoom = zoom ?? 13;
+          else if (spread < 0.05) targetZoom = 13;
+          else if (spread < 0.1) targetZoom = 12;
+          else targetZoom = 11;
 
-            flyTo(centerLng, centerLat, targetZoom);
-          }
+          flyTo(centerLng, centerLat, targetZoom);
           return { success: true };
         }
         if (bbox != null && bbox.length === 4) {
@@ -598,13 +637,7 @@ USAGE AFTER find_extreme (multiple results):
 
     const compareLocations = defineTool({
       name: "compare_locations",
-      description: `Compare multiple locations (points/regions) with bar charts, radar charts, and tables in the Analysis sidebar.
-
-IMPORTANT - targets can be place names (geocoded automatically):
-- compare_locations(targets: ["Sunset District", "Glen Park"]) - geocodes place names and compares.
-- compare_locations(targets: ["Mission District", "Western Addition"]) - works with neighborhood names.
-- compare_locations(targets: ["selected"]) - uses current map selection.
-- For "compare with cooler neighborhood": add add_extreme: { metric: "lst", mode: "min" }.`,
+      description: `Compare multiple locations in the Analysis sidebar and show metrics/charts. After find_extreme with top_n>1, pass targets = response.compare_targets only (do not call show_on_map). When user asks to show only certain metrics (e.g. "only NDVI", "just greenness"), pass metricsToShow: ['NDVI'] or ['Green Score']. Valid metric labels: NDVI, LST, Green Score, Heat Score, EVI, NDBI, BSI, Elevation, Slope, Night Lights.`,
       inputSchema: z.object({
         targets: z.array(z.union([
           z.object({
@@ -612,14 +645,14 @@ IMPORTANT - targets can be place names (geocoded automatically):
             longitude: z.number().optional(),
             latitude: z.number().optional()
           }),
-          z.string().describe("Place name (geocoded), 'selected' for map selection, 'point:lng,lat' for coords, 'feature:id' for ID")
-        ])).optional().describe("List of targets. Place names like 'Sunset District' or 'Glen Park' are geocoded automatically."),
+          z.string().describe("After find_extreme use response.compare_targets; or 'selected'; or 'point:lng,lat'; or place name")
+        ])).optional().describe("Targets. When comparing find_extreme results use the response.compare_targets array."),
         add_extreme: z.object({
           metric: z.enum(["heat_score", "green_score", "lst", "ndvi", "evi", "ndbi", "bsi", "fog_score", "elevation", "slope", "night_lights"]).describe("Metric for extreme (e.g. lst for temp, green_score for vegetation)"),
           mode: z.enum(["min", "max"]).describe("min = coolest/greenest, max = hottest"),
           top_n: z.number().min(1).max(5).optional().default(1).describe("Number of extreme locations to add"),
         }).optional().describe("Auto-add extreme location(s) - e.g. { metric: 'lst', mode: 'min' } for coolest area. Use when user asks to compare with cooler/hotter/greenest neighborhood."),
-        metricsToShow: z.array(z.string()).optional().describe("Only show these metrics in charts. E.g. ['LST','Heat Score','Green Score'] for temp focus. Omit to show all."),
+        metricsToShow: z.array(z.string()).optional().describe("Only show these metrics in the comparison charts. E.g. ['NDVI'] for greenness only, ['LST','Heat Score'] for temp. Omit to show all metrics."),
       }),
       outputSchema: z.any(),
       tool: async ({ targets, add_extreme, metricsToShow }) => {

@@ -243,6 +243,7 @@ class FindExtremeRequest(BaseModel):
     metric: str  # e.g. heat_score, green_score, lst, ndvi
     mode: str = "max"  # "max" or "min"
     top_n: int = 1  # return top N features
+    land_only: bool = True  # exclude water (elevation <= 0); set False when user asks for ocean/water areas
 
 
 @app.post("/insight/point")
@@ -329,6 +330,14 @@ async def find_extreme(req: FindExtremeRequest):
     candidates: List[Dict[str, Any]] = []
     for f in features:
         props = f.get("properties") or {}
+        if req.land_only:
+            elev = props.get("elevation")
+            if elev is not None:
+                try:
+                    if float(elev) <= 0:
+                        continue  # exclude water / sea-level cells
+                except (TypeError, ValueError):
+                    pass
         val = props.get(req.metric)
         if val is None:
             continue
@@ -353,12 +362,17 @@ async def find_extreme(req: FindExtremeRequest):
 
     candidates.sort(key=lambda x: x["value"], reverse=(req.mode == "max"))
     top = candidates[: req.top_n]
+    compare_targets = [
+        f"point:{r['center']['longitude']},{r['center']['latitude']}"
+        for r in top
+    ]
     return {
         "status": "success",
         "metric": req.metric,
         "mode": req.mode,
         "results": top,
-        "hint": "Use show_on_map with the first result's center (longitude, latitude) to show a pin, or bbox to highlight the area.",
+        "compare_targets": compare_targets,
+        "hint": "Regions are plotted on the map automatically. Call compare_locations(targets: compare_targets) to compare in the sidebar.",
     }
 
 

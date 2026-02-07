@@ -30,9 +30,13 @@ export async function POST(req: Request) {
     - "analyze_proximity": Find data near a point (e.g. 'greenest spot within 500m').
     - "search_places": Fly to a named location (e.g. 'Golden Gate Bridge').
     - "toggle_map_layer": Hide/show layers or switch map style.
-    - "compare_locations": Compare places. Use metricsToShow to limit charts to relevant metrics (e.g. ['LST','Green Score']).
-    - "show_on_map": Use locations array for multiple areas (e.g. find_extreme top_n>1). Always show recommendations on the map.
+    - "compare_locations": Compare places and show metrics in the sidebar. After find_extreme with top_n>1, pass targets = response.compare_targets only. If user asks to visualize only certain metrics (e.g. "only NDVI"), pass metricsToShow: ['NDVI'].
+    - "show_on_map": Use for single location or when user explicitly says "show X on map". Do NOT call show_on_map after find_extreme—find_extreme already plots the regions. Do not say in chat that you will "highlight on map" or "plot on map" after find_extreme; the map is already updated.
     - "analyze_temporal_trends": Show growth charts for metrics.
+
+    When user asks for "top N warmest/coolest/greenest areas and compare" (e.g. "compare top 4 greenest, show only NDVI"): (1) call find_extreme with top_n; (2) call compare_locations(targets: response.compare_targets, metricsToShow: ['NDVI'] if they asked for only NDVI). Do not call show_on_map. Do not say you will highlight or plot on map—the map is already updated by find_extreme.
+
+    Land vs water: find_extreme returns only land by default (land_only: true). So "top 3 coolest" or "warmest areas" gives land regions, not ocean. Use land_only: false only when the user explicitly asks for water/ocean (e.g. "coolest areas in the ocean", "water temperature", "marine"). Otherwise always use the default (land only) so results are on the map over land.
 
     Be concise, visual, and data-driven in your responses.`,
         });
