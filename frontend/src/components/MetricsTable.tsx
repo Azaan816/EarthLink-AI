@@ -44,8 +44,16 @@ export function MetricsTableContent({ title, headers, rows, metrics, metricsToSh
   const safeTitle = title ?? "Metrics";
   const safeMetrics = metrics ?? [];
   const hasKeyValue = safeMetrics.length > 0;
-  const safeHeaders = headers ?? [];
+  
   let safeRows = (rows ?? []).filter((r): r is Record<string, string | number> => r != null && typeof r === 'object' && !Array.isArray(r));
+  
+  // Auto-generate headers if missing but rows exist
+  let safeHeaders = headers ?? [];
+  if (safeHeaders.length === 0 && safeRows.length > 0) {
+    // Assuming first key is metric/label and others are values
+    safeHeaders = Object.keys(safeRows[0]);
+  }
+
   const hasTable = safeHeaders.length > 0 && safeRows.length > 0;
 
   // Detect comparison table: first column = metric labels, rest = location values. Show charts whenever we have 1+ location columns with numeric data.
@@ -133,7 +141,7 @@ export function MetricsTableContent({ title, headers, rows, metrics, metricsToSh
                     <CartesianGrid strokeDasharray="3 3" stroke="#374151" horizontal={false} />
                     <XAxis type="number" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} />
                     <YAxis type="category" dataKey="metric" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} width={90} />
-                    <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }} formatter={(v: number) => [Number(v).toFixed(3)]} />
+                    <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }} formatter={(v: number | undefined) => [Number(v ?? 0).toFixed(3)]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     {locationKeys.map((k, i) => <Bar key={k} dataKey={k} fill={chartColors[i % chartColors.length]} radius={[0, 4, 4, 0]} />)}
                   </BarChart>
@@ -149,7 +157,7 @@ export function MetricsTableContent({ title, headers, rows, metrics, metricsToSh
                       <PolarGrid stroke="#374151" />
                       <PolarAngleAxis dataKey="subject" tick={{ fill: '#9ca3af', fontSize: 11 }} />
                       <PolarRadiusAxis angle={90} tick={{ fill: '#9ca3af', fontSize: 10 }} />
-                      <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }} formatter={(v: number) => [Number(v).toFixed(3)]} />
+                      <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }} formatter={(v: number | undefined) => [Number(v ?? 0).toFixed(3)]} />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       {locationKeys.map((k, i) => <Radar key={k} name={k} dataKey={k} stroke={chartColors[i % chartColors.length]} fill={chartColors[i % chartColors.length]} fillOpacity={0.3} strokeWidth={2} />)}
                     </RadarChart>
@@ -165,7 +173,7 @@ export function MetricsTableContent({ title, headers, rows, metrics, metricsToSh
                     <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
                     <XAxis dataKey="name" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} tickMargin={8} />
                     <YAxis stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} width={40} />
-                    <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }} formatter={(v: number) => [Number(v).toFixed(3)]} />
+                    <Tooltip contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }} formatter={(v: number | undefined) => [Number(v ?? 0).toFixed(3)]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     {locationKeys.map((k, i) => <Line key={k} type="monotone" dataKey={k} stroke={chartColors[i % chartColors.length]} strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />)}
                   </LineChart>
@@ -221,10 +229,13 @@ export function MetricsTableContent({ title, headers, rows, metrics, metricsToSh
 export default function MetricsTable(props: MetricsTableProps) {
   const { setLeftSidebarContent, openLeftSidebar } = useLayoutDispatch();
   const safeRowsCount = (props.rows ?? []).filter((r): r is Record<string, string | number> => r != null && typeof r === 'object' && !Array.isArray(r)).length;
-  const hasData = (props.headers && props.headers.length > 0 && safeRowsCount > 0) || (props.metrics && props.metrics.length > 0);
+  // Also consider it "hasData" if rows exist, because we auto-generate headers now
+  const hasData = (safeRowsCount > 0) || (props.metrics && props.metrics.length > 0);
 
   useEffect(() => {
+    console.log("MetricsTable useEffect:", { hasData, props });
     if (hasData) {
+      console.log("Setting LeftSidebarContent inside MetricsTable useEffect");
       setLeftSidebarContent(<MetricsTableContent {...props} />, { keepAlt: true });
       openLeftSidebar();
     }

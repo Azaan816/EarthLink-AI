@@ -41,7 +41,7 @@ interface ComparisonTableProps {
 
 const CHART_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#ec4899', '#06b6d4', '#84cc16'];
 
-function getNumericValue(v: number | string | null): number | null {
+function getNumericValue(v: number | string | null | undefined): number | null {
   if (v == null) return null;
   if (typeof v === 'number' && !isNaN(v)) return v;
   const n = parseFloat(String(v));
@@ -229,7 +229,7 @@ export function ComparisonTableContent({ title = "Location Comparison", comparis
                         <LabelList
                           dataKey="value"
                           position="right"
-                          formatter={(v: number) => formatBarValue(v)}
+                          formatter={(v: any) => formatBarValue(Number(v) || 0)}
                           style={{ fill: '#9ca3af', fontSize: 10 }}
                         />
                         {data.map((_, i) => (
@@ -260,7 +260,7 @@ export function ComparisonTableContent({ title = "Location Comparison", comparis
                       <YAxis type="category" dataKey="metric" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} width={70} />
                       <Tooltip
                         contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }}
-                        formatter={(value: number, name: string) => [Number(value).toFixed(3), name]}
+                        formatter={(value: number | undefined, name: string | undefined) => [Number(value ?? 0).toFixed(3), name ?? '']}
                         labelFormatter={(label) => `Metric: ${label}`}
                       />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -285,7 +285,7 @@ export function ComparisonTableContent({ title = "Location Comparison", comparis
                       <PolarRadiusAxis angle={90} tick={{ fill: '#9ca3af', fontSize: 10 }} />
                       <Tooltip
                         contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }}
-                        formatter={(value: number) => [Number(value).toFixed(3)]}
+                        formatter={(value: number | undefined) => [Number(value ?? 0).toFixed(3)]}
                       />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       {locationLabels.map((label, idx) => (
@@ -309,7 +309,7 @@ export function ComparisonTableContent({ title = "Location Comparison", comparis
                       <YAxis stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} width={40} />
                       <Tooltip
                         contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', borderRadius: '0.5rem' }}
-                        formatter={(value: number) => [Number(value).toFixed(3)]}
+                        formatter={(value: number | undefined) => [Number(value ?? 0).toFixed(3)]}
                       />
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       {locationLabels.map((label, idx) => (

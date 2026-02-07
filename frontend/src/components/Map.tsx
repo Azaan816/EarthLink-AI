@@ -105,7 +105,9 @@ function highlightedToGeoJSON(locations: HighlightedLocation[]) {
 }
 
 function HighlightedLocationsLayer({ locations }: { locations: HighlightedLocation[] }) {
+  console.log("Rendering HighlightedLocationsLayer with:", locations);
   const { points, polygons } = highlightedToGeoJSON(locations);
+  console.log("GeoJSON generated:", { points, polygons });
   return (
     <>
       {points.features.length > 0 && (
@@ -235,6 +237,10 @@ export default function MapComponent() {
 
   const bboxGeoJSON =
     selectedRegion?.type === "bbox" ? bboxToGeoJSON(selectedRegion.bbox) : null;
+
+  useEffect(() => {
+    console.log("MapComponent highlightedLocations changed:", highlightedLocations);
+  }, [highlightedLocations]);
 
   return (
     <div className="w-full h-screen min-h-screen bg-gray-900 relative">

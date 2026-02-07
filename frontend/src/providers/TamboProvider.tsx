@@ -207,7 +207,7 @@ function useMapChatTools() {
           const metrics = propsToMetrics(data.properties);
           if (metrics.length > 0) {
             setLeftSidebarContent(
-              <MetricsTableContent title="Location Metrics" metrics={metrics} />,
+              <MetricsTableContent key={`point-${lng}-${lat}-${Date.now()}`} title="Location Metrics" metrics={metrics} />,
               { keepAlt: true }
             );
             openLeftSidebar();
@@ -256,7 +256,7 @@ function useMapChatTools() {
           }
           if (metrics.length > 0) {
             setLeftSidebarContent(
-              <MetricsTableContent title="Region Metrics" metrics={metrics} />,
+              <MetricsTableContent key={`region-${Date.now()}`} title="Region Metrics" metrics={metrics} />,
               { keepAlt: true }
             );
             openLeftSidebar();
@@ -291,7 +291,9 @@ function useMapChatTools() {
       }),
       outputSchema: z.any(),
       tool: async ({ metric, mode, top_n }) => {
+        console.log("find_extreme called:", { metric, mode, top_n });
         const data = await fetchFindExtreme({ metric, mode: mode as "max" | "min", top_n });
+        console.log("find_extreme result:", data);
         return data;
       },
     });
@@ -311,32 +313,99 @@ USAGE AFTER find_extreme (multiple results):
         latitude: z.number().optional(),
         bbox: z.array(z.number()).length(4).optional().describe("[minLng, minLat, maxLng, maxLat]"),
         zoom: z.number().min(1).max(18).optional(),
-        locations: z.array(z.union([
-          z.object({ longitude: z.number(), latitude: z.number(), label: z.string().optional() }),
-          z.object({ bbox: z.array(z.number()).length(4), label: z.string().optional() }),
-        ])).optional().describe("Multiple locations to show. Use when recommending 2+ areas (e.g. find_extreme top_n>1)."),
+        locations: z.array(z.any()).optional().describe("Multiple locations to show. Supports find_extreme results (with center/metrics), bbox, or lat/lng objects."),
       }),
       outputSchema: z.object({ success: z.boolean() }),
       tool: ({ longitude, latitude, bbox, zoom, locations }) => {
+        console.log("show_on_map called with:", { longitude, latitude, bbox, zoom, locationsLength: locations?.length, locationsSample: locations?.[0] });
+        
         if (locations && locations.length > 0) {
           const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
-          for (const loc of locations as Array<{ longitude?: number; latitude?: number; bbox?: number[] } | null>) {
-            if (!loc) continue;
-            if (loc.bbox && loc.bbox.length === 4) {
-              highlights.push({ type: "bbox", bbox: [loc.bbox[0], loc.bbox[1], loc.bbox[2], loc.bbox[3]] as [number, number, number, number] });
-            } else if (loc.longitude != null && loc.latitude != null) {
-              highlights.push({ type: "point", lng: loc.longitude, lat: loc.latitude });
+          const sidebarData: Array<{ type: "feature" | "not_found"; label: string; metrics?: Record<string, any>; id?: string }> = [];
+          
+          let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+          let count = 0;
+
+          locations.forEach((loc: any, i) => {
+            if (!loc) return;
+            
+            // Extract coordinates
+            let point: { lng: number; lat: number } | null = null;
+            let box: [number, number, number, number] | null = null;
+            
+            if (loc.bbox && Array.isArray(loc.bbox) && loc.bbox.length === 4) {
+              const b = loc.bbox.map(Number) as [number, number, number, number];
+              if (!b.some(isNaN)) box = b;
             }
-          }
+            
+            if (!box) {
+               if (loc.longitude != null && loc.latitude != null) {
+                 point = { lng: Number(loc.longitude), lat: Number(loc.latitude) };
+               } else if (loc.center && loc.center.longitude != null && loc.center.latitude != null) {
+                 point = { lng: Number(loc.center.longitude), lat: Number(loc.center.latitude) };
+               }
+            }
+
+            // Valid location found?
+            if (box) {
+              highlights.push({ type: "bbox", bbox: box });
+              minLng = Math.min(minLng, box[0]);
+              minLat = Math.min(minLat, box[1]);
+              maxLng = Math.max(maxLng, box[2]);
+              maxLat = Math.max(maxLat, box[3]);
+              count++;
+            } else if (point && !isNaN(point.lng) && !isNaN(point.lat)) {
+              highlights.push({ type: "point", lng: point.lng, lat: point.lat });
+              minLng = Math.min(minLng, point.lng);
+              minLat = Math.min(minLat, point.lat);
+              maxLng = Math.max(maxLng, point.lng);
+              maxLat = Math.max(maxLat, point.lat);
+              count++;
+            }
+
+            // Prepare Sidebar Data
+            if (box || point) {
+               const label = loc.label || (point ? `(${point.lng.toFixed(4)}, ${point.lat.toFixed(4)})` : `Area ${i + 1}`);
+               sidebarData.push({
+                 type: "feature",
+                 id: String(i),
+                 label: label,
+                 metrics: loc.metrics || loc.properties || {}
+               });
+            }
+          });
+
+          console.log("Setting highlighted locations:", highlights);
           setHighlightedLocations(highlights);
           setSelectedPoint(null);
           setSelectedRegion(null);
-          const first = highlights[0];
-          if (first?.type === "point") {
-            flyTo(first.lng, first.lat, zoom ?? 11);
-          } else if (first?.type === "bbox") {
-            const [a, b, c, d] = first.bbox;
-            flyTo((a + c) / 2, (b + d) / 2, zoom ?? 11);
+          
+          // Auto-update Sidebar if we have data
+          const hasMetrics = sidebarData.some(d => d.metrics && Object.keys(d.metrics).length > 0);
+          if (hasMetrics) {
+             console.log("Auto-populating sidebar from show_on_map data", sidebarData);
+             setLeftSidebarContent(
+               <ComparisonTableContent 
+                 key={`show-on-map-${Date.now()}`}
+                 title="Selected Locations" 
+                 comparison={sidebarData} 
+               />,
+               { keepAlt: true }
+             );
+             openLeftSidebar();
+          }
+
+          if (count > 0) {
+            const centerLng = (minLng + maxLng) / 2;
+            const centerLat = (minLat + maxLat) / 2;
+            const spread = Math.max(maxLng - minLng, maxLat - minLat);
+            let targetZoom = zoom ?? 11;
+            if (count === 1) targetZoom = zoom ?? 13;
+            else if (spread < 0.05) targetZoom = 13;
+            else if (spread < 0.1) targetZoom = 12;
+            else targetZoom = 11;
+
+            flyTo(centerLng, centerLat, targetZoom);
           }
           return { success: true };
         }
@@ -651,7 +720,8 @@ IMPORTANT - targets can be place names (geocoded automatically):
           if (safe.length > 0) {
             const metrics = metricsToShow && metricsToShow.length > 0 ? metricsToShow : (add_extreme ? (add_extreme.metric === "lst" ? ["LST", "Heat Score", "Green Score"] : add_extreme.metric === "green_score" ? ["Green Score", "NDVI", "LST"] : undefined) : undefined);
             // Key forces React to re-mount when comparison changes (fixes sidebar not updating on new compare prompts)
-            const comparisonKey = safe.map((c: { id?: string; label?: string }) => `${c?.id ?? ''}-${c?.label ?? ''}`).join('|');
+            // We append Date.now() to ensure that even if the locations are the same (e.g. same query run twice), the view refreshes.
+            const comparisonKey = safe.map((c: { id?: string; label?: string }) => `${c?.id ?? ''}-${c?.label ?? ''}`).join('|') + `-${Date.now()}`;
 
             console.log("Updating LeftSidebar with ComparisonTableContent", { metrics, comparisonKey });
 
