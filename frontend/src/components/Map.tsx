@@ -171,11 +171,11 @@ function HighlightedLocationsLayer({ locations }: { locations: HighlightedLocati
             type="symbol"
             layout={{
               "text-field": ["get", "label"],
-              "text-size": 12,
+              "text-size": ["interpolate", ["linear"], ["zoom"], 8, 16, 12, 14, 16, 12, 20, 11],
               "text-anchor": "center",
-              "text-allow-overlap": false,
-              "text-optional": true,
-              "text-padding": 4,
+              "text-allow-overlap": true,
+              "text-optional": false,
+              "text-padding": 2,
               "text-max-width": 10,
             }}
             paint={{
