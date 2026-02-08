@@ -1,4 +1,4 @@
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 export async function fetchPointInsight(longitude: number, latitude: number) {
     const res = await fetch(`${API_BASE_URL}/insight/point`, {
