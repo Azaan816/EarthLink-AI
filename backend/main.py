@@ -17,7 +17,12 @@ MAPBOX_REVERSE_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places"
 app = FastAPI(title="EarthLink AI - Python MCP Server")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://earth-link-ai.vercel.app",
+        "https://earth-link-ai.vercel.app/",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
