@@ -200,6 +200,13 @@ async def root():
         "status": "active"
     }
 
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+
 @app.get("/mcp/tools")
 async def list_tools():
     """List all available MCP tools."""
