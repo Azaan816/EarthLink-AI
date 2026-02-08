@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from geo_utils import bbox_intersects, get_polygon_ring, point_in_polygon, ring_bbox, ring_center, haversine_distance
@@ -15,6 +16,7 @@ MAPBOX_REVERSE_URL = "https://api.mapbox.com/geocoding/v5/mapbox.places"
 
 # Initialize FastAPI
 app = FastAPI(title="EarthLink AI - Python MCP Server")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -29,8 +31,11 @@ app.add_middleware(
 )
 
 # Constants
-FRONTEND_PUBLIC_DATA_DIR = Path(__file__).resolve().parent.parent / "frontend" / "public" / "data"
-SF_FEATURES_PATH = FRONTEND_PUBLIC_DATA_DIR / "sf" / "features.geojson"
+PUBLIC_DATA_DIR = Path(__file__).resolve().parent / "public" / "data"
+SF_FEATURES_PATH = PUBLIC_DATA_DIR / "sf" / "features.geojson"
+
+# Mount static files
+app.mount("/data", StaticFiles(directory=PUBLIC_DATA_DIR), name="data")
 
 # Cached SF GeoJSON (loaded on first insight request)
 _sf_geojson: Optional[Dict[str, Any]] = None
@@ -103,10 +108,11 @@ async def get_precomputed_data(
     metric_safe = "".join([c for c in metric if c.isalnum() or c in ('-','_')]).lower()
     
     file_name = f"{metric_safe}.geojson" # Simplified naming for demo
-    local_path = FRONTEND_PUBLIC_DATA_DIR / region_safe / file_name
+    local_path = PUBLIC_DATA_DIR / region_safe / file_name
     
     # In a real app, we might check if file exists here, or just return the URL
     # public_url = f"/data/{region_safe}/{file_name}"
+    
     
     if not local_path.exists():
          return {
@@ -114,13 +120,22 @@ async def get_precomputed_data(
             "message": f"Precomputed data not found for region: {region_name}, metric: {metric}",
             "available_datasets": ["detroit/ndvi", "detroit/landuse"] # Mock suggestion
         }
+
+    # Construct public URL
+    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+    if domain:
+        base_url = f"https://{domain}"
+    else:
+        base_url = "http://localhost:8000"
+        
+    public_url = f"{base_url}/data/{region_safe}/{file_name}"
         
     return {
         "status": "success",
         "dataset_id": dataset_id,
         "region": region_name,
         "metric": metric,
-        "url": f"/data/{region_safe}/{file_name}",  # Frontend relative URL
+        "url": public_url,
         "type": "FeatureCollection"
     }
 

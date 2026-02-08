@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 import argparse
 
-def import_geojson(source_path: str, region: str, metric: str, target_base_dir: str = "../frontend/public/data"):
+def import_geojson(source_path: str, region: str, metric: str, target_base_dir: str = "public/data"):
     """
     Imports a GeoJSON file from a source (e.g., Downloads folder) to the App's public data directory.
     Structure: public/data/{region}/{metric}.geojson
