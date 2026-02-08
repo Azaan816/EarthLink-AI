@@ -45,7 +45,7 @@ function createMapboxFilter(filterExpression: string): any[] {
 
     if (isNaN(value)) return ["all"];
 
-    // Map human metric names to properties
+    // Map human metric names to properties (must match GeoJSON properties)
     const metricMap: Record<string, string> = {
       "ndvi": "ndvi",
       "green_score": "green_score",
@@ -53,7 +53,13 @@ function createMapboxFilter(filterExpression: string): any[] {
       "heat_score": "heat_score",
       "heat score": "heat_score",
       "lst": "lst",
-      "elevation": "elevation"
+      "elevation": "elevation",
+      "bsi": "bsi",
+      "ndbi": "ndbi",
+      "evi": "evi",
+      "slope": "slope",
+      "fog_score": "fog_score",
+      "night_lights": "night_lights",
     };
 
     const prop = metricMap[metricRaw] || metricRaw;
@@ -79,15 +85,24 @@ const PULSE_SPEED = 0.5;
 function highlightedToGeoJSON(locations: HighlightedLocation[]) {
   const points: Array<{ type: 'Feature'; properties: { index: number }; geometry: { type: 'Point'; coordinates: [number, number] } }> = [];
   const polygons: Array<{ type: 'Feature'; properties: { index: number }; geometry: { type: 'Polygon'; coordinates: number[][][] } }> = [];
+  const labelPoints: Array<{ type: 'Feature'; properties: { label: string }; geometry: { type: 'Point'; coordinates: [number, number] } }> = [];
   locations.forEach((loc, i) => {
+    const label = loc.label ?? String(i + 1);
     if (loc.type === 'point') {
       points.push({
         type: 'Feature',
         properties: { index: i },
         geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
       });
+      labelPoints.push({
+        type: 'Feature',
+        properties: { label },
+        geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
+      });
     } else {
       const [minLng, minLat, maxLng, maxLat] = loc.bbox;
+      const centerLng = (minLng + maxLng) / 2;
+      const centerLat = (minLat + maxLat) / 2;
       polygons.push({
         type: 'Feature',
         properties: { index: i },
@@ -96,18 +111,22 @@ function highlightedToGeoJSON(locations: HighlightedLocation[]) {
           coordinates: [[[minLng, minLat], [maxLng, minLat], [maxLng, maxLat], [minLng, maxLat], [minLng, minLat]]],
         },
       });
+      labelPoints.push({
+        type: 'Feature',
+        properties: { label },
+        geometry: { type: 'Point', coordinates: [centerLng, centerLat] },
+      });
     }
   });
   return {
     points: { type: 'FeatureCollection' as const, features: points },
     polygons: { type: 'FeatureCollection' as const, features: polygons },
+    labelPoints: { type: 'FeatureCollection' as const, features: labelPoints },
   };
 }
 
 function HighlightedLocationsLayer({ locations }: { locations: HighlightedLocation[] }) {
-  console.log("Rendering HighlightedLocationsLayer with:", locations);
-  const { points, polygons } = highlightedToGeoJSON(locations);
-  console.log("GeoJSON generated:", { points, polygons });
+  const { points, polygons, labelPoints } = highlightedToGeoJSON(locations);
   return (
     <>
       {points.features.length > 0 && (
@@ -141,6 +160,28 @@ function HighlightedLocationsLayer({ locations }: { locations: HighlightedLocati
             paint={{
               "line-color": "#6366f1",
               "line-width": 2,
+            }}
+          />
+        </Source>
+      )}
+      {labelPoints.features.length > 0 && (
+        <Source id="highlighted-labels" type="geojson" data={labelPoints}>
+          <Layer
+            id="highlighted-labels-text"
+            type="symbol"
+            layout={{
+              "text-field": ["get", "label"],
+              "text-size": 12,
+              "text-anchor": "center",
+              "text-allow-overlap": false,
+              "text-optional": true,
+              "text-padding": 4,
+              "text-max-width": 10,
+            }}
+            paint={{
+              "text-color": "#ffffff",
+              "text-halo-color": "rgba(0,0,0,0.85)",
+              "text-halo-width": 2,
             }}
           />
         </Source>
@@ -180,6 +221,9 @@ export default function MapComponent() {
   const showHeatmapLayer = isLayerVisible && heatmapMetric && heatmapDataUrl;
   const rawHeatmapFilter = activeFilter ? createMapboxFilter(activeFilter) : undefined;
   const heatmapFilter = rawHeatmapFilter && (rawHeatmapFilter[0] !== "all" || rawHeatmapFilter.length > 1) ? rawHeatmapFilter : undefined;
+  const showFilterLayer = Boolean(activeFilter && heatmapDataUrl && !showHeatmapLayer);
+  const filterLayerFilter = activeFilter ? createMapboxFilter(activeFilter) : undefined;
+  const filterLayerFilterValid = filterLayerFilter && filterLayerFilter[0] !== "all";
 
 
   selectedPointRef.current = selectedPoint ?? null;
@@ -323,6 +367,21 @@ export default function MapComponent() {
         attributionControl={false}
         onError={(e) => console.error("Mapbox Error:", e)}
       >
+        {/* Dedicated filter layer: when user sets "NDVI > 0.5" / "BSI > 0.1" etc., show matching grid cells */}
+        {showFilterLayer && filterLayerFilterValid && (
+          <Source id="filter-grid" type="geojson" data={heatmapDataUrl}>
+            <Layer
+              id="filter-fill"
+              type="fill"
+              filter={filterLayerFilter}
+              paint={{
+                "fill-color": "#a855f7",
+                "fill-opacity": 0.55,
+                "fill-outline-color": "rgba(168, 85, 247, 0.8)",
+              }}
+            />
+          </Source>
+        )}
         {showHeatmapLayer && (
           <Source id="heatmap-data" type="geojson" data={heatmapDataUrl}>
             <Layer

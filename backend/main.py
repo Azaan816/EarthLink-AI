@@ -417,11 +417,14 @@ async def insight_proximity(req: ProximityRequest):
                 except (ValueError, TypeError):
                     continue
             
+            bbox = ring_bbox(ring)
+            center = ring_center(ring)
             results.append({
                 "feature_id": f.get("id"),
                 "distance": round(dist, 1),
                 "properties": props,
-                "bbox": ring_bbox(ring)
+                "bbox": bbox,
+                "center": {"longitude": center[0], "latitude": center[1]},
             })
 
     # Sort by distance
@@ -429,13 +432,18 @@ async def insight_proximity(req: ProximityRequest):
     
     # Cap results to avoid overwhelming payload
     results = results[:50]
+    compare_targets = [
+        f"point:{r['center']['longitude']},{r['center']['latitude']}"
+        for r in results[:20]
+    ]
 
     return {
         "status": "success",
         "count": len(results),
         "radius_meters": req.radius_meters,
         "results": results,
-        "hint": "Use show_on_map with bbox of interesting results."
+        "compare_targets": compare_targets,
+        "hint": "Regions are plotted on the map automatically. Call compare_locations(targets: compare_targets) to compare in the sidebar.",
     }
 
 

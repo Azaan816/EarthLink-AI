@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useRef, useEffect } from "react";
 import { TamboProvider, TamboComponent, defineTool } from "@tambo-ai/react";
 import { z } from "zod";
-import { useMapChat } from "@/context/MapChatContext";
+import { useMapChat, type HighlightedLocation } from "@/context/MapChatContext";
 import { useLayoutDispatch } from "@/context/LayoutContext";
 import { fetchPointInsight, fetchRegionInsight, fetchFindExtreme, fetchProximity, fetchComparison, fetchTemporalTrend } from "@/lib/insight-api";
 import InsightCard from "@/components/InsightCard";
@@ -165,8 +165,13 @@ const components: TamboComponent[] = [
 ];
 
 function useMapChatTools() {
-  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setHighlightedLocations, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle } = useMapChat();
+  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, highlightedLocations, setHighlightedLocations, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle } = useMapChat();
   const { setLeftSidebarContent, openLeftSidebar } = useLayoutDispatch();
+  const highlightedLocationsRef = useRef<HighlightedLocation[]>([]);
+
+  useEffect(() => {
+    highlightedLocationsRef.current = highlightedLocations;
+  }, [highlightedLocations]);
 
   return useMemo(() => {
     const navigateMap = defineTool({
@@ -269,7 +274,7 @@ function useMapChatTools() {
     const findExtreme = defineTool({
       name: "find_extreme",
       description:
-        "Find location(s) with highest or lowest value for a metric (e.g. '3 warmest areas', 'greenest spot'). By default returns only land (excludes ocean/water). Use land_only: false only when the user explicitly asks for water/ocean areas (e.g. 'coolest spots in the ocean'). Returns 'results' and 'compare_targets'. Map is updated automatically. When top_n>1 call compare_locations(targets: response.compare_targets) only.",
+        "Find location(s) with highest or lowest value for a metric (e.g. '3 warmest areas', 'greenest spot'). By default returns only land (excludes ocean/water). Use land_only: false only when the user explicitly asks for water/ocean areas. Returns 'results' and 'compare_targets'. Map is updated automatically. When comparing two sets (e.g. 3 hottest + 3 greenest), call find_extreme for the first set, then find_extreme for the second with append: true so all stay on the map; then call compare_locations with targets = [...first.compare_targets, ...second.compare_targets].",
       inputSchema: z.object({
         metric: z
           .enum([
@@ -289,15 +294,16 @@ function useMapChatTools() {
         mode: z.enum(["max", "min"]).optional().default("max").describe("max = hottest/greenest, min = coolest/least green"),
         top_n: z.number().min(1).max(20).optional().default(1).describe("Return top N locations (1-20, default 1)"),
         land_only: z.boolean().optional().default(true).describe("True = only land (exclude ocean/water). Set false only when user explicitly asks for water/ocean areas."),
+        append: z.boolean().optional().default(false).describe("If true, add these results to the map without removing existing highlights. Use when showing two sets (e.g. 3 hottest then 3 greenest) so all stay visible."),
       }),
       outputSchema: z.any(),
-      tool: async ({ metric, mode, top_n, land_only }) => {
-        console.log("find_extreme called:", { metric, mode, top_n, land_only });
+      tool: async ({ metric, mode, top_n, land_only, append }) => {
+        console.log("find_extreme called:", { metric, mode, top_n, land_only, append });
         const data = await fetchFindExtreme({ metric, mode: mode as "max" | "min", top_n, land_only });
         console.log("find_extreme result:", data);
 
         if (data?.status === "success" && Array.isArray(data.results) && data.results.length > 0) {
-          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
+          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number]; label?: string } | { type: "point"; lng: number; lat: number; label?: string }> = [];
           let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
           data.results.forEach((r: any) => {
             if (!r) return;
@@ -327,14 +333,43 @@ function useMapChatTools() {
             }
           });
           if (highlights.length > 0) {
-            setHighlightedLocations(highlights);
+            const existing = highlightedLocationsRef.current;
+            const nextLocations = append && existing.length > 0
+              ? [...existing, ...highlights]
+              : highlights;
+            highlightedLocationsRef.current = nextLocations;
+            setHighlightedLocations(nextLocations);
             setSelectedPoint(null);
             setSelectedRegion(null);
-            const centerLng = (minLng + maxLng) / 2;
-            const centerLat = (minLat + maxLat) / 2;
-            const spread = Math.max(maxLng - minLng, maxLat - minLat);
-            const targetZoom = spread < 0.05 ? 13 : spread < 0.1 ? 12 : 11;
-            flyTo(centerLng, centerLat, targetZoom);
+            if (append && existing.length > 0) {
+              const all = nextLocations;
+              let aMinLng = 180, aMaxLng = -180, aMinLat = 90, aMaxLat = -90;
+              all.forEach((loc) => {
+                if (loc.type === "point") {
+                  aMinLng = Math.min(aMinLng, loc.lng);
+                  aMaxLng = Math.max(aMaxLng, loc.lng);
+                  aMinLat = Math.min(aMinLat, loc.lat);
+                  aMaxLat = Math.max(aMaxLat, loc.lat);
+                } else {
+                  const [x0, y0, x1, y1] = loc.bbox;
+                  aMinLng = Math.min(aMinLng, x0);
+                  aMaxLng = Math.max(aMaxLng, x1);
+                  aMinLat = Math.min(aMinLat, y0);
+                  aMaxLat = Math.max(aMaxLat, y1);
+                }
+              });
+              const centerLng = (aMinLng + aMaxLng) / 2;
+              const centerLat = (aMinLat + aMaxLat) / 2;
+              const spread = Math.max(aMaxLng - aMinLng, aMaxLat - aMinLat);
+              const targetZoom = spread < 0.05 ? 13 : spread < 0.1 ? 12 : 11;
+              flyTo(centerLng, centerLat, targetZoom);
+            } else {
+              const centerLng = (minLng + maxLng) / 2;
+              const centerLat = (minLat + maxLat) / 2;
+              const spread = Math.max(maxLng - minLng, maxLat - minLat);
+              const targetZoom = spread < 0.05 ? 13 : spread < 0.1 ? 12 : 11;
+              flyTo(centerLng, centerLat, targetZoom);
+            }
           }
         }
 
@@ -344,7 +379,7 @@ function useMapChatTools() {
 
     const showOnMap = defineTool({
       name: "show_on_map",
-      description: `Highlight one or more locations on the map. Use for a single place or when the user explicitly asks to "show X on map". Do NOT call after find_extreme—find_extreme already plots the regions. Single location: pass bbox OR (longitude, latitude). Multiple: pass locations array with center/bbox.`,
+      description: `Highlight one or more locations on the map. Use for a single place or when the user explicitly asks to "show X on map". Do NOT call after find_extreme or analyze_proximity—both already plot regions on the map. Single location: pass bbox OR (longitude, latitude). Multiple: pass locations array (each with center or bbox).`,
       inputSchema: z.object({
         longitude: z.number().optional(),
         latitude: z.number().optional(),
@@ -419,7 +454,7 @@ function useMapChatTools() {
             setSelectedRegion(null);
           }
           if (highlights.length === 0) {
-            return { success: true, message: "Locations already shown (from find_extreme). No change." };
+            return { success: true, message: "No valid locations could be parsed from the data. Map unchanged." };
           }
 
           const hasMetrics = sidebarData.some(d => d.metrics && Object.keys(d.metrics).length > 0);
@@ -487,7 +522,7 @@ function useMapChatTools() {
     const analyzeProximity = defineTool({
       name: "analyze_proximity",
       description:
-        "Find areas within a radius of a specific point. Use for 'find greenest spot within 500m' or 'what is near here'. Returns matching areas with distance. When describing results to the user, use place names or 'this area'—never feature_id or grid cell id.",
+        "Find areas within a radius of a point (e.g. 'green options near the Mission within 2 miles'). The map is updated immediately with the top results—do NOT call this again to 're-plot' or 're-display'. Do NOT call show_on_map. Next: (1) compare_locations(targets: response.compare_targets); (2) optionally label_areas(labels: [...]) with names from get_place_name. When describing results, use place names—never feature_id or grid cell id.",
       inputSchema: z.object({
         longitude: z.number().optional().describe("Center longitude (defaults to selected point)"),
         latitude: z.number().optional().describe("Center latitude (defaults to selected point)"),
@@ -504,7 +539,47 @@ function useMapChatTools() {
           lng = selectedPoint.lng;
           lat = selectedPoint.lat;
         }
-        return await fetchProximity({ longitude: lng, latitude: lat, radius_meters, metric, threshold });
+        const data = await fetchProximity({ longitude: lng, latitude: lat, radius_meters, metric, threshold });
+        if (data?.status === "success" && Array.isArray(data.results) && data.results.length > 0) {
+          const topN = data.results.slice(0, 15);
+          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
+          let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+          topN.forEach((r: { bbox?: number[]; center?: { longitude: number; latitude: number } }) => {
+            if (!r) return;
+            if (r.bbox && Array.isArray(r.bbox) && r.bbox.length === 4) {
+              const b = r.bbox.map(Number) as [number, number, number, number];
+              if (!b.some(isNaN)) {
+                highlights.push({ type: "bbox", bbox: b });
+                minLng = Math.min(minLng, b[0]);
+                minLat = Math.min(minLat, b[1]);
+                maxLng = Math.max(maxLng, b[2]);
+                maxLat = Math.max(maxLat, b[3]);
+              }
+            } else if (r.center) {
+              const lngV = Number(r.center.longitude);
+              const latV = Number(r.center.latitude);
+              if (!isNaN(lngV) && !isNaN(latV)) {
+                highlights.push({ type: "point", lng: lngV, lat: latV });
+                minLng = Math.min(minLng, lngV);
+                minLat = Math.min(minLat, latV);
+                maxLng = Math.max(maxLng, lngV);
+                maxLat = Math.max(maxLat, latV);
+              }
+            }
+          });
+          if (highlights.length > 0) {
+            highlightedLocationsRef.current = highlights;
+            setHighlightedLocations(highlights);
+            setSelectedPoint(null);
+            setSelectedRegion(null);
+            const centerLng = (minLng + maxLng) / 2;
+            const centerLat = (minLat + maxLat) / 2;
+            const spread = Math.max(maxLng - minLng, maxLat - minLat);
+            const targetZoom = spread < 0.05 ? 14 : spread < 0.1 ? 13 : 12;
+            flyTo(centerLng, centerLat, targetZoom);
+          }
+        }
+        return data;
       },
     });
 
@@ -773,6 +848,28 @@ function useMapChatTools() {
       },
     });
 
+    const labelAreas = defineTool({
+      name: "label_areas",
+      description: "Assign user-friendly labels to the areas currently highlighted on the map. Call this right after find_extreme or analyze_proximity (the map already has the regions—do not re-run those tools). Pass labels array in the same order as the highlighted areas. Use neighborhood names from get_place_name when possible.",
+      inputSchema: z.object({
+        labels: z.array(z.string()).describe("Labels for each highlighted area in order, e.g. ['Haight Ashbury', 'Diamond Heights', 'Forest Knolls']. Length should match number of highlighted areas."),
+      }),
+      outputSchema: z.object({ success: z.boolean(), message: z.string().optional() }),
+      tool: ({ labels }) => {
+        const current = highlightedLocationsRef.current.length > 0 ? highlightedLocationsRef.current : highlightedLocations;
+        if (!current || current.length === 0) {
+          return { success: false, message: "No areas are currently highlighted. Run find_extreme or analyze_proximity first." };
+        }
+        const updated = current.map((loc, i) => ({
+          ...loc,
+          label: labels[i] != null && String(labels[i]).trim() ? String(labels[i]).trim() : loc.label ?? String(i + 1),
+        }));
+        highlightedLocationsRef.current = updated;
+        setHighlightedLocations(updated);
+        return { success: true, message: `Labeled ${updated.length} areas on the map.` };
+      },
+    });
+
     const analyzeTemporalTrends = defineTool({
       name: "analyze_temporal_trends",
       description: "Show a trend over time for a location. Use for 'how has vegetation changed here?'. Returns trend data.",
@@ -817,8 +914,8 @@ function useMapChatTools() {
       }
     });
 
-    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, getPlaceName, searchPlaces, toggleMapLayer, visualizeHeatmap, compareLocations, analyzeTemporalTrends];
-  }, [flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setHighlightedLocations, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle, setLeftSidebarContent, openLeftSidebar]);
+    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, getPlaceName, searchPlaces, toggleMapLayer, visualizeHeatmap, compareLocations, labelAreas, analyzeTemporalTrends];
+  }, [flyTo, selectedPoint, selectedRegion, highlightedLocations, setSelectedPoint, setSelectedRegion, setHighlightedLocations, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle, setLeftSidebarContent, openLeftSidebar]);
 }
 
 
