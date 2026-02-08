@@ -47,21 +47,33 @@ export default function MainLayout() {
 // but actually I should probably just rewrite LeftSidebar to be "content only" or adapt it.
 // Let's re-use the LeftSidebar component but modify its CSS in the next step to fit this "flex push" model 
 // OR just put the content here.
-import { X } from "lucide-react";
+import { X, BarChart3 } from "lucide-react";
 
 function LeftSidebarContentWrapper() {
-    const { leftSidebarContent, closeLeftSidebar } = useLayout();
+    const { leftSidebarContent, leftSidebarAltContent, closeLeftSidebar, toggleSidebarView } = useLayout();
+    const canToggle = leftSidebarAltContent != null;
     return (
         <div className="flex flex-col h-full w-full bg-gray-900">
-            <div className="flex items-center justify-between p-4 border-b border-gray-800 bg-gray-900/50 backdrop-blur-md">
-                <h2 className="font-semibold text-lg text-emerald-400">Analysis</h2>
-                <button
-                    onClick={closeLeftSidebar}
-                    className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
-                    title="Close Sidebar"
-                >
-                    <X size={20} />
-                </button>
+            <div className="flex items-center justify-between p-4 border-b border-gray-800 bg-gray-900/50 backdrop-blur-md gap-2">
+                <h2 className="font-semibold text-lg text-emerald-400 shrink-0">Analysis</h2>
+                <div className="flex items-center gap-1 shrink-0">
+                    {canToggle && (
+                        <button
+                            onClick={toggleSidebarView}
+                            className="p-1.5 text-gray-400 hover:text-emerald-400 rounded transition-colors"
+                            title="Toggle between summary and graphs"
+                        >
+                            <BarChart3 size={18} />
+                        </button>
+                    )}
+                    <button
+                        onClick={closeLeftSidebar}
+                        className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+                        title="Close Sidebar"
+                    >
+                        <X size={20} />
+                    </button>
+                </div>
             </div>
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 {leftSidebarContent || (

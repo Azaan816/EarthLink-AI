@@ -200,6 +200,13 @@ async def root():
         "status": "active"
     }
 
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+
+
 @app.get("/mcp/tools")
 async def list_tools():
     """List all available MCP tools."""
@@ -243,6 +250,7 @@ class FindExtremeRequest(BaseModel):
     metric: str  # e.g. heat_score, green_score, lst, ndvi
     mode: str = "max"  # "max" or "min"
     top_n: int = 1  # return top N features
+    land_only: bool = True  # exclude water (elevation <= 0); set False when user asks for ocean/water areas
 
 
 @app.post("/insight/point")
@@ -329,6 +337,14 @@ async def find_extreme(req: FindExtremeRequest):
     candidates: List[Dict[str, Any]] = []
     for f in features:
         props = f.get("properties") or {}
+        if req.land_only:
+            elev = props.get("elevation")
+            if elev is not None:
+                try:
+                    if float(elev) <= 0:
+                        continue  # exclude water / sea-level cells
+                except (TypeError, ValueError):
+                    pass
         val = props.get(req.metric)
         if val is None:
             continue
@@ -353,12 +369,17 @@ async def find_extreme(req: FindExtremeRequest):
 
     candidates.sort(key=lambda x: x["value"], reverse=(req.mode == "max"))
     top = candidates[: req.top_n]
+    compare_targets = [
+        f"point:{r['center']['longitude']},{r['center']['latitude']}"
+        for r in top
+    ]
     return {
         "status": "success",
         "metric": req.metric,
         "mode": req.mode,
         "results": top,
-        "hint": "Use show_on_map with the first result's center (longitude, latitude) to show a pin, or bbox to highlight the area.",
+        "compare_targets": compare_targets,
+        "hint": "Regions are plotted on the map automatically. Call compare_locations(targets: compare_targets) to compare in the sidebar.",
     }
 
 
@@ -403,11 +424,14 @@ async def insight_proximity(req: ProximityRequest):
                 except (ValueError, TypeError):
                     continue
             
+            bbox = ring_bbox(ring)
+            center = ring_center(ring)
             results.append({
                 "feature_id": f.get("id"),
                 "distance": round(dist, 1),
                 "properties": props,
-                "bbox": ring_bbox(ring)
+                "bbox": bbox,
+                "center": {"longitude": center[0], "latitude": center[1]},
             })
 
     # Sort by distance
@@ -415,13 +439,18 @@ async def insight_proximity(req: ProximityRequest):
     
     # Cap results to avoid overwhelming payload
     results = results[:50]
+    compare_targets = [
+        f"point:{r['center']['longitude']},{r['center']['latitude']}"
+        for r in results[:20]
+    ]
 
     return {
         "status": "success",
         "count": len(results),
         "radius_meters": req.radius_meters,
         "results": results,
-        "hint": "Use show_on_map with bbox of interesting results."
+        "compare_targets": compare_targets,
+        "hint": "Regions are plotted on the map automatically. Call compare_locations(targets: compare_targets) to compare in the sidebar.",
     }
 
 
