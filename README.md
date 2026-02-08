@@ -79,7 +79,107 @@ The same chat turn that calls `compare_locations` can push a **ComparisonTable**
 
 Insights are driven by **Harmonized Sentinel-2 MSI Level-2A (SR)** — the same [dataset](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED) in Google Earth Engine: atmospherically corrected surface reflectance, 13 spectral bands (visible/NIR at 10 m, red edge/SWIR at 20 m). NDVI, green score, heat score, and related metrics are derived from this source. The pipeline is built for [Google Earth Engine](https://earthengine.google.com/); for the MVP we use precomputed GeoJSON (e.g. San Francisco) so the **agent experience** is what we're judged on—same tools and prompts will plug into live GEE when we scale.
 
-- **Coverage:** The app currently covers the **San Francisco area** only, because our precomputed data is limited to this region.
+> ⚠️ **Coverage:** The app currently covers the **San Francisco Bay Area only**, because our precomputed satellite data is limited to this region. All queries and examples should reference locations within San Francisco.
+
+---
+
+## 💬 Example Prompts
+
+Here are example prompts that showcase EarthLink AI's capabilities. Each demonstrates how natural language drives real actions on the map and sidebar.
+
+### 🧭 Exploration & Navigation
+
+| Prompt | What happens |
+|--------|--------------|
+| *"Take me to the Mission District"* | `search_places` flies the map to the Mission District and drops a pin |
+| *"Go to Golden Gate Park"* | `search_places` locates and zooms to Golden Gate Park |
+| *"What's the name of this place?"* | `get_place_name` reverse-geocodes the selected point to show the neighborhood or address |
+| *"Zoom out to see all of San Francisco"* | `navigate_map` adjusts the viewport to show the full city |
+
+### 🔍 Discovery & Finding Locations
+
+| Prompt | What happens |
+|--------|--------------|
+| *"Show me the 5 hottest areas in San Francisco"* | `find_extreme` locates the top 5 heat-score areas, highlights them on the map, and shows metrics |
+| *"Where are the greenest spots in the city?"* | `find_extreme` finds areas with highest green score and plots them |
+| *"Find the coolest neighborhoods"* | `find_extreme` with `mode: min` on `lst` (land surface temperature) |
+| *"Show me 3 areas with the most vegetation and 3 with the least"* | Two `find_extreme` calls with `append: true` — first for max NDVI, then min NDVI, keeping all 6 on the map |
+| *"What are the most built-up areas?"* | `find_extreme` on `ndbi` (Normalized Difference Built-up Index) |
+
+### 📍 Proximity Analysis
+
+| Prompt | What happens |
+|--------|--------------|
+| *"Find green spaces within 1 mile of my location"* | `analyze_proximity` searches for high green-score areas within the radius and plots results |
+| *"Show me cool areas near the Ferry Building"* | `search_places` → `analyze_proximity` chains to find thermally comfortable spots nearby |
+| *"What parks are within 2km of Union Square?"* | `analyze_proximity` with metric filter for high NDVI |
+| *"Find shaded areas within walking distance of SOMA"* | Proximity search with green score threshold |
+
+### 📊 Point & Region Insights
+
+| Prompt | What happens |
+|--------|--------------|
+| *"What's the environmental profile of this spot?"* | `get_insight_at_point` returns NDVI, heat score, LST, and other metrics for the clicked location |
+| *"Analyze this area I just drew"* | `get_insight_for_region` computes aggregates (mean, min, max) for the selected rectangle |
+| *"How green is the Presidio?"* | `search_places` → `get_insight_for_region` to get vegetation metrics |
+| *"What's the temperature like in the Financial District?"* | Insight query focused on LST and heat score |
+
+### 🔥 Heatmap & Visual Filters
+
+| Prompt | What happens |
+|--------|--------------|
+| *"Show me a heat map of the city"* | `visualize_heatmap` with `metric: heat` — red/orange for hot, blue for cool |
+| *"Visualize vegetation across San Francisco"* | `visualize_heatmap` with `metric: greenness` — green choropleth layer |
+| *"Highlight only the areas with NDVI above 0.5"* | `filter_map_view` applies a visual filter to show high-vegetation zones |
+| *"Show me where heat score exceeds 0.8"* | Filter to display heat-vulnerable areas |
+| *"Switch to satellite view"* | `toggle_map_layer` changes the basemap style |
+
+### ⚖️ Comparison & Analysis
+
+| Prompt | What happens |
+|--------|--------------|
+| *"Compare the Mission and the Sunset"* | `compare_locations` geocodes both neighborhoods and shows side-by-side metrics with bar/radar charts |
+| *"How does Pacific Heights compare to the Tenderloin for heat?"* | Comparison with `metricsToShow: ['LST', 'Heat Score']` for focused analysis |
+| *"Compare the 3 hottest areas with the 3 coolest"* | `find_extreme` (2x with append) → `compare_locations` chains all 6 locations into one comparison |
+| *"Is this spot cooler than the city average?"* | `compare_locations` with `add_extreme` to auto-add a reference point |
+
+### 🏷️ Labeling & Annotation
+
+| Prompt | What happens |
+|--------|--------------|
+| *"Label the top 3 green areas on the map"* | `find_extreme` → `label_areas` with `labelOnlyFirst: 3` adds neighborhood names to the top results |
+| *"Name these spots"* | `get_place_name` for each location → `label_areas` to annotate |
+
+### 📈 Temporal Trends
+
+| Prompt | What happens |
+|--------|--------------|
+| *"How has vegetation changed here over time?"* | `analyze_temporal_trends` shows a line chart of NDVI over multiple years |
+| *"Show me the greenness trend for Golden Gate Park"* | Temporal analysis with GrowthChart component |
+
+---
+
+### 🔗 Multi-Step Workflows
+
+EarthLink AI chains tools for complex queries:
+
+**Example 1: "Find the 3 greenest areas near downtown and compare them"**
+1. `search_places` → flies to downtown SF
+2. `analyze_proximity` → finds high green-score areas within radius
+3. `compare_locations` → shows side-by-side metrics in sidebar
+4. `label_areas` → annotates top 3 with neighborhood names
+
+**Example 2: "Show me the hottest and coolest spots and tell me why"**
+1. `find_extreme` (heat_score, max, top_n=3) → plots hottest areas
+2. `find_extreme` (lst, min, top_n=3, append=true) → adds coolest without removing hot
+3. `compare_locations` → displays full comparison with charts
+4. **KeyTakeaways** component → AI explains the urban heat island effect
+
+**Example 3: "I'm looking for a cool, green neighborhood to move to — what are my options near the Marina?"**
+1. `search_places` → flies to Marina District
+2. `analyze_proximity` (radius=2000m, metric=green_score, threshold=0.6) → finds green options
+3. `compare_locations` with `metricsToShow: ['Green Score', 'LST', 'Heat Score']`
+4. **InsightCard** + **KeyTakeaways** → AI recommends top picks with reasoning
 
 ---
 
@@ -131,6 +231,119 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
 **4. Use it**
 
 Open the app and ask in natural language. The map and sidebar update from Tambo tool and component calls.
+
+---
+
+## 📦 Using Your Own Data
+
+While this repo includes only **San Francisco data**, the architecture is designed to work with **any region**. You can process and import your own geospatial data to analyze different cities or areas.
+
+### Data Format Requirements
+
+Your GeoJSON file must be a **FeatureCollection** with polygon features. Each feature should include these properties for full functionality:
+
+```jsonc
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "cell_001",  // Unique identifier
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[lng, lat], [lng, lat], ...]]
+      },
+      "properties": {
+        // Environmental indices (0-1 range)
+        "ndvi": 0.45,           // Normalized Difference Vegetation Index
+        "evi": 0.38,            // Enhanced Vegetation Index
+        "ndbi": 0.12,           // Normalized Difference Built-up Index
+        "bsi": 0.08,            // Bare Soil Index
+        
+        // Derived scores (0-1 range)
+        "green_score": 0.62,    // Vegetation/greenness composite
+        "heat_score": 0.35,     // Urban heat intensity
+        "fog_score": 0.20,      // Fog/marine layer presence
+        
+        // Absolute measurements
+        "lst": 32.5,            // Land Surface Temperature (°C)
+        "elevation": 45.2,      // Elevation (meters) — values ≤ 0 are treated as water
+        "slope": 3.8,           // Terrain slope (degrees)
+        "night_lights": 0.75    // Nighttime light intensity
+      }
+    }
+  ]
+}
+```
+
+> 💡 **Tip:** You don't need all properties — the app gracefully handles missing metrics. At minimum, include `ndvi` or `green_score` for basic vegetation analysis.
+
+### Importing Your Data
+
+Use the included import script to add your GeoJSON to the app:
+
+```bash
+cd backend
+python import_data.py <source_file> <region_name> <metric_name>
+```
+
+**Example — Adding Detroit NDVI data:**
+
+```bash
+python import_data.py ~/Downloads/detroit_ndvi.geojson detroit features
+```
+
+This copies the file to `backend/public/data/detroit/features.geojson`.
+
+### Step-by-Step: Adding a New Region
+
+1. **Prepare your GeoJSON**
+   - Export from Google Earth Engine, QGIS, or any geospatial tool
+   - Ensure it follows the format above (FeatureCollection with properties)
+   - Grid cells of ~200-500m work best for urban analysis
+
+2. **Import the data**
+   ```bash
+   cd backend
+   python import_data.py /path/to/your_region.geojson your_region features
+   ```
+
+3. **Update the backend to use your region** (optional)
+   
+   Edit `backend/main.py` to point to your region:
+   ```python
+   # Change this line:
+   SF_FEATURES_PATH = PUBLIC_DATA_DIR / "sf" / "features.geojson"
+   # To:
+   SF_FEATURES_PATH = PUBLIC_DATA_DIR / "your_region" / "features.geojson"
+   ```
+
+4. **Update the geocoding bounding box** (recommended)
+   
+   In `frontend/src/providers/TamboProvider.tsx`, update the Mapbox search bounds to your region:
+   ```typescript
+   // Find the bbox parameter in search_places and analyze_proximity
+   // Change from SF coordinates to your region's bounds:
+   bbox=-122.5155,37.7024,-122.3549,37.8324  // SF
+   bbox=-83.287803,42.255192,-82.910451,42.45023  // Example: Detroit
+   ```
+
+5. **Restart the backend and frontend**
+   ```bash
+   # Terminal 1
+   cd backend && uvicorn main:app --reload
+   
+   # Terminal 2
+   cd frontend && npm run dev
+   ```
+
+### Data Sources
+
+You can generate compatible GeoJSON from:
+- **[Google Earth Engine](https://earthengine.google.com/)** — Export Sentinel-2 derived indices as GeoJSON
+- **[QGIS](https://qgis.org/)** — Process raster data and export as vector grid
+- **OpenStreetMap + Sentinel Hub** — Combine land use with satellite imagery
+- **Custom pipelines** — Any tool that outputs GeoJSON with the required properties
 
 ---
 

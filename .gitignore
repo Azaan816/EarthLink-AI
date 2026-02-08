@@ -63,6 +63,7 @@ Thumbs.db
 *.tmp
 plan.md
 docs/
+presentation/
 
 # Data (Passive Precomputed Data)
 # Depending on the size, you might want to ignore large GeoJSON/GeoTIFF files
