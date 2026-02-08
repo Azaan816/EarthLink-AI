@@ -39,9 +39,18 @@ function usePointDetails(selectedPoint: { lng: number; lat: number } | null) {
 /** Format AI text: **bold**, paragraphs, bullet lines — smooth futuristic typography */
 function formatAIText(text: string) {
     const lines = text.split(/\n/).map((l) => l.trim()).filter(Boolean);
+    
+    // Filter out raw JSON lines (likely tool outputs/logs)
+    const cleanLines = lines.filter(line => {
+        const startsWithJson = line.startsWith("{") || line.startsWith("[");
+        const hasJsonKey = line.includes('":') || line.includes("':");
+        // If it starts with { or [ and has a "key": pattern, it's likely a raw JSON dump
+        return !(startsWithJson && hasJsonKey);
+    });
+
     return (
         <div className="space-y-2">
-            {lines.map((line, i) => {
+            {cleanLines.map((line, i) => {
                 const isBullet = /^[-•*]\s+/.test(line) || /^\*\*[^*]+\*\*:?\s*/.test(line);
                 const clean = line.replace(/^\s*[-•*]\s*/, "");
                 const parts = clean.split(/(\*\*[^*]+\*\*)/g);
