@@ -5,8 +5,8 @@ import Map, { NavigationControl, Source, Layer } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
 import type { GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { useMapChat } from "@/context/MapChatContext";
-import { MapPin, Square, Layers } from "lucide-react";
+import { useMapChat, type HighlightedLocation } from "@/context/MapChatContext";
+import { MapPin, Square, Layers, Plus, Minus } from "lucide-react";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -45,7 +45,7 @@ function createMapboxFilter(filterExpression: string): any[] {
 
     if (isNaN(value)) return ["all"];
 
-    // Map human metric names to properties
+    // Map human metric names to properties (must match GeoJSON properties)
     const metricMap: Record<string, string> = {
       "ndvi": "ndvi",
       "green_score": "green_score",
@@ -53,7 +53,13 @@ function createMapboxFilter(filterExpression: string): any[] {
       "heat_score": "heat_score",
       "heat score": "heat_score",
       "lst": "lst",
-      "elevation": "elevation"
+      "elevation": "elevation",
+      "bsi": "bsi",
+      "ndbi": "ndbi",
+      "evi": "evi",
+      "slope": "slope",
+      "fog_score": "fog_score",
+      "night_lights": "night_lights",
     };
 
     const prop = metricMap[metricRaw] || metricRaw;
@@ -76,6 +82,114 @@ function createMapboxFilter(filterExpression: string): any[] {
 
 const PULSE_SPEED = 0.5;
 
+function highlightedToGeoJSON(locations: HighlightedLocation[]) {
+  const points: Array<{ type: 'Feature'; properties: { index: number }; geometry: { type: 'Point'; coordinates: [number, number] } }> = [];
+  const polygons: Array<{ type: 'Feature'; properties: { index: number }; geometry: { type: 'Polygon'; coordinates: number[][][] } }> = [];
+  const labelPoints: Array<{ type: 'Feature'; properties: { label: string }; geometry: { type: 'Point'; coordinates: [number, number] } }> = [];
+  locations.forEach((loc, i) => {
+    const label = loc.label ?? String(i + 1);
+    if (loc.type === 'point') {
+      points.push({
+        type: 'Feature',
+        properties: { index: i },
+        geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
+      });
+      labelPoints.push({
+        type: 'Feature',
+        properties: { label },
+        geometry: { type: 'Point', coordinates: [loc.lng, loc.lat] },
+      });
+    } else {
+      const [minLng, minLat, maxLng, maxLat] = loc.bbox;
+      const centerLng = (minLng + maxLng) / 2;
+      const centerLat = (minLat + maxLat) / 2;
+      polygons.push({
+        type: 'Feature',
+        properties: { index: i },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[minLng, minLat], [maxLng, minLat], [maxLng, maxLat], [minLng, maxLat], [minLng, minLat]]],
+        },
+      });
+      labelPoints.push({
+        type: 'Feature',
+        properties: { label },
+        geometry: { type: 'Point', coordinates: [centerLng, centerLat] },
+      });
+    }
+  });
+  return {
+    points: { type: 'FeatureCollection' as const, features: points },
+    polygons: { type: 'FeatureCollection' as const, features: polygons },
+    labelPoints: { type: 'FeatureCollection' as const, features: labelPoints },
+  };
+}
+
+function HighlightedLocationsLayer({ locations }: { locations: HighlightedLocation[] }) {
+  const { points, polygons, labelPoints } = highlightedToGeoJSON(locations);
+  return (
+    <>
+      {points.features.length > 0 && (
+        <Source id="highlighted-points" type="geojson" data={points}>
+          <Layer
+            id="highlighted-points-circle"
+            type="circle"
+            paint={{
+              "circle-radius": 10,
+              "circle-color": "#22d3ee",
+              "circle-stroke-width": 2,
+              "circle-stroke-color": "#fff",
+              "circle-opacity": 0.9,
+            }}
+          />
+        </Source>
+      )}
+      {polygons.features.length > 0 && (
+        <Source id="highlighted-polygons" type="geojson" data={polygons}>
+          <Layer
+            id="highlighted-polygons-fill"
+            type="fill"
+            paint={{
+              "fill-color": "#6366f1",
+              "fill-opacity": 0.2,
+            }}
+          />
+          <Layer
+            id="highlighted-polygons-outline"
+            type="line"
+            paint={{
+              "line-color": "#6366f1",
+              "line-width": 2,
+            }}
+          />
+        </Source>
+      )}
+      {labelPoints.features.length > 0 && (
+        <Source id="highlighted-labels" type="geojson" data={labelPoints}>
+          <Layer
+            id="highlighted-labels-text"
+            type="symbol"
+            layout={{
+              "text-field": ["get", "label"],
+              "text-size": 12,
+              "text-anchor": "center",
+              "text-allow-overlap": false,
+              "text-optional": true,
+              "text-padding": 4,
+              "text-max-width": 10,
+            }}
+            paint={{
+              "text-color": "#ffffff",
+              "text-halo-color": "rgba(0,0,0,0.85)",
+              "text-halo-width": 2,
+            }}
+          />
+        </Source>
+      )}
+    </>
+  );
+}
+
 export default function MapComponent() {
   const mapRef = useRef<MapRef>(null);
   const selectedPointRef = useRef<{ lng: number; lat: number } | null>(null);
@@ -84,6 +198,8 @@ export default function MapComponent() {
     flyToRequest,
     selectedPoint,
     selectedRegion,
+    highlightedLocations,
+    setHighlightedLocations,
     bboxCorner1,
     selectionMode,
     setViewport,
@@ -105,6 +221,9 @@ export default function MapComponent() {
   const showHeatmapLayer = isLayerVisible && heatmapMetric && heatmapDataUrl;
   const rawHeatmapFilter = activeFilter ? createMapboxFilter(activeFilter) : undefined;
   const heatmapFilter = rawHeatmapFilter && (rawHeatmapFilter[0] !== "all" || rawHeatmapFilter.length > 1) ? rawHeatmapFilter : undefined;
+  const showFilterLayer = Boolean(activeFilter && heatmapDataUrl && !showHeatmapLayer);
+  const filterLayerFilter = activeFilter ? createMapboxFilter(activeFilter) : undefined;
+  const filterLayerFilterValid = filterLayerFilter && filterLayerFilter[0] !== "all";
 
 
   selectedPointRef.current = selectedPoint ?? null;
@@ -163,43 +282,79 @@ export default function MapComponent() {
   const bboxGeoJSON =
     selectedRegion?.type === "bbox" ? bboxToGeoJSON(selectedRegion.bbox) : null;
 
+  useEffect(() => {
+    console.log("MapComponent highlightedLocations changed:", highlightedLocations);
+  }, [highlightedLocations]);
+
+  const handleZoomIn = () => {
+    mapRef.current?.getMap().zoomIn();
+  };
+
+  const handleZoomOut = () => {
+    mapRef.current?.getMap().zoomOut();
+  };
+
   return (
     <div className="w-full h-screen min-h-screen bg-gray-900 relative">
       <div className="absolute left-3 top-3 z-10 flex flex-col gap-2">
-        <div className="flex rounded bg-gray-900/90 shadow overflow-hidden">
-          <button
-            type="button"
-            onClick={() => {
-              setSelectionMode("point");
-              setBboxCorner1(null);
-              setSelectedRegion(null);
-            }}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors ${selectionMode === "point" ? "bg-emerald-600 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
-            title="Click map to select a single point"
-          >
-            <MapPin size={14} /> Point
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectionMode("region");
-              setSelectedPoint(null);
-              setBboxCorner1(null);
-              setSelectedRegion(null);
-            }}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors ${selectionMode === "region" ? "bg-emerald-600 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
-            title="Click twice to draw a rectangle: first corner, then opposite corner"
-          >
-            <Square size={14} /> Region
-          </button>
-          <button
-            type="button"
-            onClick={() => setMapStyle(mapStyle === "dark" ? "satellite" : "dark")}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors border-l border-gray-800 ${mapStyle === "satellite" ? "bg-emerald-600 text-white" : "text-gray-400 hover:bg-gray-800 hover:text-gray-200"}`}
-            title="Toggle Satellite View"
-          >
-            <Layers size={14} /> {mapStyle === "satellite" ? "Map" : "Satellite"}
-          </button>
+        <div className="flex flex-col gap-2">
+          {/* Tool Selector Panel */}
+          <div className="flex items-center gap-1 p-1 bg-gray-950/80 backdrop-blur-md border border-gray-800/50 shadow-xl rounded-2xl">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectionMode("point");
+                setBboxCorner1(null);
+                setSelectedRegion(null);
+              }}
+              className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl transition-all duration-200 ${
+                selectionMode === "point"
+                  ? "bg-cyan-500/20 text-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)] border border-cyan-500/30"
+                  : "text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-transparent"
+              }`}
+              title="Select Point"
+            >
+              <MapPin size={16} />
+              <span>Point</span>
+            </button>
+            
+            <div className="w-px h-6 bg-gray-800 mx-1" />
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectionMode("region");
+                setSelectedPoint(null);
+                setBboxCorner1(null);
+                setSelectedRegion(null);
+              }}
+              className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl transition-all duration-200 ${
+                selectionMode === "region"
+                  ? "bg-cyan-500/20 text-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.2)] border border-cyan-500/30"
+                  : "text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-transparent"
+              }`}
+              title="Select Region"
+            >
+              <Square size={16} />
+              <span>Region</span>
+            </button>
+
+            <div className="w-px h-6 bg-gray-800 mx-1" />
+
+            <button
+              type="button"
+              onClick={() => setMapStyle(mapStyle === "dark" ? "satellite" : "dark")}
+              className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-xl transition-all duration-200 ${
+                mapStyle === "satellite"
+                  ? "bg-purple-500/20 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.2)] border border-purple-500/30"
+                  : "text-gray-400 hover:text-gray-200 hover:bg-white/5 border border-transparent"
+              }`}
+              title="Toggle View"
+            >
+              <Layers size={16} />
+              <span>{mapStyle === "satellite" ? "Map" : "Satellite"}</span>
+            </button>
+          </div>
         </div>
         {selectionMode === "region" && bboxCorner1 && (
           <div className="rounded bg-amber-900/80 px-2 py-1 text-xs text-amber-200 shadow">
@@ -217,6 +372,7 @@ export default function MapComponent() {
         onMove={(evt) => setViewport(evt.viewState)}
         onClick={(evt) => {
           const { lng, lat } = evt.lngLat;
+          setHighlightedLocations([]);
           if (selectionMode === "point") {
             setSelectedPoint({ lng, lat });
             setSelectedRegion(null);
@@ -243,14 +399,29 @@ export default function MapComponent() {
         attributionControl={false}
         onError={(e) => console.error("Mapbox Error:", e)}
       >
+        {/* Dedicated filter layer: when user sets "NDVI > 0.5" / "BSI > 0.1" etc., show matching grid cells */}
+        {showFilterLayer && filterLayerFilterValid && (
+          <Source id="filter-grid" type="geojson" data={heatmapDataUrl || ""}>
+            <Layer
+              id="filter-fill"
+              type="fill"
+              filter={filterLayerFilter}
+              paint={{
+                "fill-color": "#a855f7",
+                "fill-opacity": 0.55,
+                "fill-outline-color": "rgba(168, 85, 247, 0.8)",
+              }}
+            />
+          </Source>
+        )}
         {showHeatmapLayer && (
-          <Source id="heatmap-data" type="geojson" data={heatmapDataUrl}>
+          <Source id="heatmap-data" type="geojson" data={heatmapDataUrl || ""}>
             <Layer
               id="heatmap-fill"
               type="fill"
               {...(heatmapFilter != null ? { filter: heatmapFilter } : {})}
               paint={
-                heatmapMetric === "heat"
+                (heatmapMetric === "heat"
                   ? {
                       "fill-color": [
                         "interpolate",
@@ -288,7 +459,7 @@ export default function MapComponent() {
                         0,
                       ],
                       "fill-outline-color": "rgba(255,255,255,0.15)",
-                    }
+                    }) as any
               }
             />
           </Source>
@@ -431,7 +602,27 @@ export default function MapComponent() {
             />
           </Source>
         )}
-        <NavigationControl position="top-right" />
+        {highlightedLocations.length > 0 && (
+          <HighlightedLocationsLayer locations={highlightedLocations} />
+        )}
+        <div className="absolute top-3 right-3 flex flex-col gap-2 z-10">
+          <div className="flex flex-col bg-gray-950/80 backdrop-blur-md border border-gray-800/50 shadow-xl rounded-2xl overflow-hidden p-1">
+            <button
+              onClick={handleZoomIn}
+              className="p-2 text-gray-400 hover:text-cyan-400 hover:bg-white/5 transition-colors rounded-xl"
+              title="Zoom In"
+            >
+              <Plus size={20} />
+            </button>
+            <button
+              onClick={handleZoomOut}
+              className="p-2 text-gray-400 hover:text-cyan-400 hover:bg-white/5 transition-colors rounded-xl"
+              title="Zoom Out"
+            >
+              <Minus size={20} />
+            </button>
+          </div>
+        </div>
       </Map>
     </div>
   );

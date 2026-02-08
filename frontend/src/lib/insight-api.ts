@@ -27,7 +27,12 @@ export async function fetchRegionInsight(params: { bbox?: number[]; feature_id?:
     return res.json();
 }
 
-export async function fetchFindExtreme(params: { metric: string; mode: "max" | "min"; top_n?: number }) {
+export async function fetchFindExtreme(params: {
+    metric: string;
+    mode: "max" | "min";
+    top_n?: number;
+    land_only?: boolean;
+}) {
     const res = await fetch(`${API_BASE_URL}/insight/find`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

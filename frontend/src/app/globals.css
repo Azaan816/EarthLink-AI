@@ -37,3 +37,28 @@ body {
 .input-glow:focus {
   box-shadow: 0 0 0 2px rgb(var(--glow-cyan) / 0.5), 0 0 20px rgb(var(--glow-cyan) / 0.2);
 }
+
+/* Custom scrollbar – thin dark theme scrollbars instead of browser defaults */
+/* Global Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent; /* blend with background */
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(75, 85, 99, 0.4); /* subtle grey */
+  border-radius: 10px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 211, 238, 0.6); /* glow-cyan on hover */
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

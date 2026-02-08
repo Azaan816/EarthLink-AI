@@ -1,16 +1,77 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useRef, useEffect } from "react";
 import { TamboProvider, TamboComponent, defineTool } from "@tambo-ai/react";
 import { z } from "zod";
-import { useMapChat } from "@/context/MapChatContext";
+import { useMapChat, type HighlightedLocation } from "@/context/MapChatContext";
+import { useLayoutDispatch } from "@/context/LayoutContext";
 import { fetchPointInsight, fetchRegionInsight, fetchFindExtreme, fetchProximity, fetchComparison, fetchTemporalTrend } from "@/lib/insight-api";
 import InsightCard from "@/components/InsightCard";
-import MetricsTable from "@/components/MetricsTable";
+import MetricsTable, { MetricsTableContent } from "@/components/MetricsTable";
 import KeyTakeaways from "@/components/KeyTakeaways";
 import RegionSummaryCard from "@/components/RegionSummaryCard";
-import ComparisonTable from "@/components/ComparisonTable";
+import ComparisonTable, { ComparisonTableContent } from "@/components/ComparisonTable";
 import GrowthChart from "@/components/GrowthChart";
+
+/** Convert backend properties/aggregates to MetricsTable metrics array */
+function propsToMetrics(props: Record<string, unknown> | null | undefined): Array<{ label: string; value: string | number }> {
+  if (!props || typeof props !== "object") return [];
+  const LABELS: Record<string, string> = {
+    ndvi: "NDVI",
+    evi: "EVI",
+    ndbi: "NDBI",
+    bsi: "BSI",
+    lst: "Land surface temp (LST)",
+    heat_score: "Heat score",
+    green_score: "Green score",
+    fog_score: "Fog score",
+    elevation: "Elevation (m)",
+    slope: "Slope (°)",
+    night_lights: "Night lights",
+  };
+  const order = ["heat_score", "lst", "green_score", "ndvi", "evi", "ndbi", "bsi", "fog_score", "elevation", "slope", "night_lights"];
+  const seen = new Set<string>();
+  const result: Array<{ label: string; value: string | number }> = [];
+  for (const k of order) {
+    const v = props[k];
+    if (v == null) continue;
+    seen.add(k);
+    const label = LABELS[k] ?? k.replace(/_/g, " ");
+    result.push({ label, value: typeof v === "number" ? v : String(v) });
+  }
+  for (const k of Object.keys(props)) {
+    if (seen.has(k)) continue;
+    const v = props[k];
+    if (v == null || typeof v === "object") continue;
+    result.push({ label: k.replace(/_/g, " "), value: typeof v === "number" ? v : String(v) });
+  }
+  return result;
+}
+
+/** Convert region aggregates (ndvi_mean etc) to metrics for single-location display */
+function aggregatesToMetrics(agg: Record<string, unknown> | null | undefined): Array<{ label: string; value: string | number }> {
+  if (!agg || typeof agg !== "object") return [];
+  const LABELS: Record<string, string> = {
+    ndvi: "NDVI",
+    evi: "EVI",
+    lst: "LST",
+    heat_score: "Heat score",
+    green_score: "Green score",
+    fog_score: "Fog score",
+    elevation: "Elevation",
+    slope: "Slope",
+    night_lights: "Night lights",
+  };
+  const result: Array<{ label: string; value: string | number }> = [];
+  for (const [key, v] of Object.entries(agg)) {
+    if (v == null) continue;
+    const base = key.replace(/_mean$|_min$|_max$/, "");
+    const suffix = key.endsWith("_mean") ? " (mean)" : key.endsWith("_min") ? " (min)" : key.endsWith("_max") ? " (max)" : "";
+    const label = (LABELS[base] ?? base.replace(/_/g, " ")) + suffix;
+    result.push({ label, value: typeof v === "number" ? v : String(v) });
+  }
+  return result;
+}
 
 const components: TamboComponent[] = [
   {
@@ -36,15 +97,18 @@ const components: TamboComponent[] = [
   {
     name: "MetricsTable",
     description:
-      "Display a table of metrics. Pass 'metrics' (array of { label, value }) for a two-column table. Good for comparing indicators (NDVI, LST, green_score, heat_score, elevation, slope, etc.).",
+      "Display a table of metrics with bar, radar, and line charts whenever possible. For comparison: ALWAYS pass 'headers' (e.g. ['Metric','Western Addition','Mission']) and 'rows' (e.g. [{ Metric: 'LST', 'Western Addition': 35.82, 'Mission': 39.95 }]). Charts auto-render when headers+rows have 1+ location columns with numeric values. For single-location: pass 'metrics' (array of { label, value }).",
     component: MetricsTable,
     propsSchema: z.object({
       title: z.string().optional().default("Metrics").describe("Table title"),
+      headers: z.array(z.string()).optional().describe("For comparison: e.g. ['Metric','Sunset','Mission']"),
+      rows: z.array(z.any()).optional().describe("For comparison: array of objects e.g. [{ Metric: 'Heat score', Sunset: 0.23, Mission: 1 }]"),
+      metricsToShow: z.array(z.string()).optional().describe("Only show these metrics in charts. Omit to show all."),
       metrics: z
         .array(z.object({ label: z.string().optional().default(""), value: z.union([z.string(), z.number()]).optional().default("—") }))
         .optional()
         .default([])
-        .describe("Two-column: label and value pairs"),
+        .describe("Two-column: label and value pairs (use when not comparing)"),
     }),
   },
   {
@@ -76,11 +140,12 @@ const components: TamboComponent[] = [
   },
   {
     name: "ComparisonTable",
-    description: "Display a side-by-side comparison of multiple locations. Use when the user asks to compare two or more places. Shows metrics for each location.",
+    description: "Display comparison with bar/radar/line charts and table. Pass metricsToShow to show only relevant metrics (e.g. ['LST','Green Score'] for temp/greenness). Omit to show all metrics.",
     component: ComparisonTable,
     propsSchema: z.object({
       title: z.string().optional().default("Location Comparison"),
-      comparison: z.array(z.any()).optional().default([]).describe("Array of comparison results from compare_locations tool"),
+      comparison: z.array(z.any()).optional().default([]).describe("Array of comparison results from compare_locations tool."),
+      metricsToShow: z.array(z.string()).optional().describe("Only show these metrics in charts. Omit to show all. E.g. ['LST','Green Score'] for temperature/greenness focus."),
     }),
   },
   {
@@ -100,7 +165,13 @@ const components: TamboComponent[] = [
 ];
 
 function useMapChatTools() {
-  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle } = useMapChat();
+  const { flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, highlightedLocations, setHighlightedLocations, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle } = useMapChat();
+  const { setLeftSidebarContent, openLeftSidebar } = useLayoutDispatch();
+  const highlightedLocationsRef = useRef<HighlightedLocation[]>([]);
+
+  useEffect(() => {
+    highlightedLocationsRef.current = highlightedLocations;
+  }, [highlightedLocations]);
 
   return useMemo(() => {
     const navigateMap = defineTool({
@@ -137,6 +208,16 @@ function useMapChatTools() {
           lat = selectedPoint.lat;
         }
         const data = await fetchPointInsight(lng, lat);
+        if (data && data.status === "success" && data.properties) {
+          const metrics = propsToMetrics(data.properties);
+          if (metrics.length > 0) {
+            setLeftSidebarContent(
+              <MetricsTableContent key={`point-${lng}-${lat}-${Date.now()}`} title="Location Metrics" metrics={metrics} />,
+              { keepAlt: true }
+            );
+            openLeftSidebar();
+          }
+        }
         return data;
       },
     });
@@ -144,7 +225,7 @@ function useMapChatTools() {
     const getInsightForRegion = defineTool({
       name: "get_insight_for_region",
       description:
-        "Get environmental insight for an area. Use when the user drew a rectangle on the map or asks about 'this area' or 'the selected region'. Omit arguments to use the user's current region selection. Returns area size and aggregates (mean/min/max). When telling the user the region name, use get_place_name with a point inside the area—never mention feature_id or grid cell id to the user.",
+        "Get environmental insight for an area. Use when the user drew a rectangle on the map or asks about 'this area' or 'the selected region'. A selected point is treated as a small area around that point. Omit arguments to use the user's current selection (region or point). Returns area size and aggregates (mean/min/max).",
       inputSchema: z.object({
         bbox: z.array(z.number()).length(4).optional().describe("Bounding box [min_lng, min_lat, max_lng, max_lat]"),
         feature_id: z.string().optional().describe("Internal region id; do not expose to user"),
@@ -157,10 +238,35 @@ function useMapChatTools() {
           if (selectedRegion.type === "bbox") useBbox = selectedRegion.bbox;
           else useFeatureId = selectedRegion.id;
         }
+        // Fallback: treat selected point as "this area" - create small bbox around it
+        if (useBbox == null && useFeatureId == null && selectedPoint) {
+          const d = 0.003; // ~300m - captures the grid cell containing the point
+          useBbox = [
+            selectedPoint.lng - d,
+            selectedPoint.lat - d,
+            selectedPoint.lng + d,
+            selectedPoint.lat + d,
+          ];
+        }
         if (useBbox == null && useFeatureId == null) {
-          return { error: "No region selected. Ask the user to draw or select a region, or provide bbox or feature_id." };
+          return { error: "No region or point selected. Ask the user to click a point or draw a region on the map, or provide bbox or feature_id." };
         }
         const data = await fetchRegionInsight({ bbox: useBbox ?? undefined, feature_id: useFeatureId ?? undefined });
+        if (data && data.status === "success") {
+          let metrics: Array<{ label: string; value: string | number }> = [];
+          if (data.feature) {
+            metrics = propsToMetrics(data.feature);
+          } else if (data.aggregates) {
+            metrics = aggregatesToMetrics(data.aggregates);
+          }
+          if (metrics.length > 0) {
+            setLeftSidebarContent(
+              <MetricsTableContent key={`region-${Date.now()}`} title="Region Metrics" metrics={metrics} />,
+              { keepAlt: true }
+            );
+            openLeftSidebar();
+          }
+        }
         return data;
       },
     });
@@ -168,7 +274,7 @@ function useMapChatTools() {
     const findExtreme = defineTool({
       name: "find_extreme",
       description:
-        "Find the location(s) with highest or lowest value for a metric in San Francisco. Use for questions like 'hottest area', 'greenest spot', 'coolest place'. Returns for each: center (longitude, latitude), bbox [min_lng, min_lat, max_lng, max_lat]. Then call show_on_map with bbox to highlight the area, or with center for a pin only.",
+        "Find location(s) with highest or lowest value for a metric (e.g. '3 warmest areas', 'greenest spot'). By default returns only land (excludes ocean/water). Use land_only: false only when the user explicitly asks for water/ocean areas. Returns 'results' and 'compare_targets'. Map is updated automatically. When comparing two sets (e.g. 3 hottest + 3 greenest), call find_extreme for the first set, then find_extreme for the second with append: true so all stay on the map; then call compare_locations with targets = [...first.compare_targets, ...second.compare_targets].",
       inputSchema: z.object({
         metric: z
           .enum([
@@ -187,53 +293,211 @@ function useMapChatTools() {
           .describe("Metric: heat_score (heat), green_score (greenery), lst (temp), ndvi, etc."),
         mode: z.enum(["max", "min"]).optional().default("max").describe("max = hottest/greenest, min = coolest/least green"),
         top_n: z.number().min(1).max(20).optional().default(1).describe("Return top N locations (1-20, default 1)"),
+        land_only: z.boolean().optional().default(true).describe("True = only land (exclude ocean/water). Set false only when user explicitly asks for water/ocean areas."),
+        append: z.boolean().optional().default(false).describe("If true, add these results to the map without removing existing highlights. Use when showing two sets (e.g. 3 hottest then 3 greenest) so all stay visible."),
       }),
       outputSchema: z.any(),
-      tool: async ({ metric, mode, top_n }) => {
-        const data = await fetchFindExtreme({ metric, mode: mode as "max" | "min", top_n });
+      tool: async ({ metric, mode, top_n, land_only, append }) => {
+        console.log("find_extreme called:", { metric, mode, top_n, land_only, append });
+        const data = await fetchFindExtreme({ metric, mode: mode as "max" | "min", top_n, land_only });
+        console.log("find_extreme result:", data);
+
+        if (data?.status === "success" && Array.isArray(data.results) && data.results.length > 0) {
+          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number]; label?: string } | { type: "point"; lng: number; lat: number; label?: string }> = [];
+          let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+          data.results.forEach((r: any) => {
+            if (!r) return;
+            let box: [number, number, number, number] | null = null;
+            let point: { lng: number; lat: number } | null = null;
+            if (r.bbox && Array.isArray(r.bbox) && r.bbox.length === 4) {
+              const b = r.bbox.map(Number) as [number, number, number, number];
+              if (!b.some(isNaN)) box = b;
+            }
+            if (!box && r.center) {
+              const lng = Number(r.center.longitude);
+              const lat = Number(r.center.latitude);
+              if (!isNaN(lng) && !isNaN(lat)) point = { lng, lat };
+            }
+            if (box) {
+              highlights.push({ type: "bbox", bbox: box });
+              minLng = Math.min(minLng, box[0]);
+              minLat = Math.min(minLat, box[1]);
+              maxLng = Math.max(maxLng, box[2]);
+              maxLat = Math.max(maxLat, box[3]);
+            } else if (point) {
+              highlights.push({ type: "point", lng: point.lng, lat: point.lat });
+              minLng = Math.min(minLng, point.lng);
+              minLat = Math.min(minLat, point.lat);
+              maxLng = Math.max(maxLng, point.lng);
+              maxLat = Math.max(maxLat, point.lat);
+            }
+          });
+          if (highlights.length > 0) {
+            const existing = highlightedLocationsRef.current;
+            const nextLocations = append && existing.length > 0
+              ? [...existing, ...highlights]
+              : highlights;
+            highlightedLocationsRef.current = nextLocations;
+            setHighlightedLocations(nextLocations);
+            setSelectedPoint(null);
+            setSelectedRegion(null);
+            if (append && existing.length > 0) {
+              const all = nextLocations;
+              let aMinLng = 180, aMaxLng = -180, aMinLat = 90, aMaxLat = -90;
+              all.forEach((loc) => {
+                if (loc.type === "point") {
+                  aMinLng = Math.min(aMinLng, loc.lng);
+                  aMaxLng = Math.max(aMaxLng, loc.lng);
+                  aMinLat = Math.min(aMinLat, loc.lat);
+                  aMaxLat = Math.max(aMaxLat, loc.lat);
+                } else {
+                  const [x0, y0, x1, y1] = loc.bbox;
+                  aMinLng = Math.min(aMinLng, x0);
+                  aMaxLng = Math.max(aMaxLng, x1);
+                  aMinLat = Math.min(aMinLat, y0);
+                  aMaxLat = Math.max(aMaxLat, y1);
+                }
+              });
+              const centerLng = (aMinLng + aMaxLng) / 2;
+              const centerLat = (aMinLat + aMaxLat) / 2;
+              const spread = Math.max(aMaxLng - aMinLng, aMaxLat - aMinLat);
+              const targetZoom = spread < 0.05 ? 13 : spread < 0.1 ? 12 : 11;
+              flyTo(centerLng, centerLat, targetZoom);
+            } else {
+              const centerLng = (minLng + maxLng) / 2;
+              const centerLat = (minLat + maxLat) / 2;
+              const spread = Math.max(maxLng - minLng, maxLat - minLat);
+              const targetZoom = spread < 0.05 ? 13 : spread < 0.1 ? 12 : 11;
+              flyTo(centerLng, centerLat, targetZoom);
+            }
+          }
+        }
+
         return data;
       },
     });
 
     const showOnMap = defineTool({
       name: "show_on_map",
-      description: `Highlight a location on the map by showing a pin or highlighting an area.
-
-USAGE AFTER find_extreme or analyze_proximity:
-- These tools return results with a 'bbox' field
-- ALWAYS pass that bbox directly: show_on_map(bbox: results[0].bbox)
-- Example: If results[0].bbox = [-122.46, 37.70, -122.45, 37.71], pass that exact array
-
-USAGE FOR COORDINATES:
-- Pass both longitude AND latitude together: show_on_map(longitude: -122.4613, latitude: 37.7073)
-
-CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call this tool without parameters.`,
+      description: `Highlight one or more locations on the map. Use for a single place or when the user explicitly asks to "show X on map". Do NOT call after find_extreme or analyze_proximity—both already plot regions on the map. Single location: pass bbox OR (longitude, latitude). Multiple: pass locations array (each with center or bbox).`,
       inputSchema: z.object({
-        longitude: z.number().optional().describe("Center longitude. Required if bbox not provided. Example: -122.4613"),
-        latitude: z.number().optional().describe("Center latitude. Required if bbox not provided. Example: 37.7073"),
-        bbox: z.array(z.number()).length(4).optional().describe("Array [minLng, minLat, maxLng, maxLat]. Get from results[0].bbox after find_extreme or analyze_proximity. Example: [-122.46, 37.70, -122.45, 37.71]. PREFERRED for highlighting the area."),
-        zoom: z.number().min(1).max(18).optional().describe("Map zoom level (default 14 for pin, 12 for area)"),
+        longitude: z.number().optional(),
+        latitude: z.number().optional(),
+        bbox: z.array(z.number()).length(4).optional().describe("[minLng, minLat, maxLng, maxLat]"),
+        zoom: z.number().min(1).max(18).optional(),
+        locations: z.array(z.any()).optional().describe("Array of locations. After find_extreme use the exact 'results' array from that response (each has center, bbox, properties)."),
       }),
       outputSchema: z.object({ success: z.boolean() }),
-      tool: ({ longitude, latitude, bbox, zoom }) => {
+      tool: ({ longitude, latitude, bbox, zoom, locations }) => {
+        console.log("show_on_map called with:", { longitude, latitude, bbox, zoom, locationsLength: locations?.length, locationsSample: locations?.[0] });
+        
+        if (locations && locations.length > 0) {
+          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
+          const sidebarData: Array<{ type: "feature" | "not_found"; label: string; metrics?: Record<string, any>; id?: string }> = [];
+          
+          let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+          let count = 0;
+
+          locations.forEach((loc: any, i) => {
+            if (!loc) return;
+            
+            // Extract coordinates
+            let point: { lng: number; lat: number } | null = null;
+            let box: [number, number, number, number] | null = null;
+            
+            if (loc.bbox && Array.isArray(loc.bbox) && loc.bbox.length === 4) {
+              const b = loc.bbox.map(Number) as [number, number, number, number];
+              if (!b.some(isNaN)) box = b;
+            }
+            
+            if (!box) {
+               if (loc.longitude != null && loc.latitude != null) {
+                 point = { lng: Number(loc.longitude), lat: Number(loc.latitude) };
+               } else if (loc.center && loc.center.longitude != null && loc.center.latitude != null) {
+                 point = { lng: Number(loc.center.longitude), lat: Number(loc.center.latitude) };
+               }
+            }
+
+            // Valid location found?
+            if (box) {
+              highlights.push({ type: "bbox", bbox: box });
+              minLng = Math.min(minLng, box[0]);
+              minLat = Math.min(minLat, box[1]);
+              maxLng = Math.max(maxLng, box[2]);
+              maxLat = Math.max(maxLat, box[3]);
+              count++;
+            } else if (point && !isNaN(point.lng) && !isNaN(point.lat)) {
+              highlights.push({ type: "point", lng: point.lng, lat: point.lat });
+              minLng = Math.min(minLng, point.lng);
+              minLat = Math.min(minLat, point.lat);
+              maxLng = Math.max(maxLng, point.lng);
+              maxLat = Math.max(maxLat, point.lat);
+              count++;
+            }
+
+            // Prepare Sidebar Data
+            if (box || point) {
+               const label = loc.label || (point ? `(${point.lng.toFixed(4)}, ${point.lat.toFixed(4)})` : `Area ${i + 1}`);
+               sidebarData.push({
+                 type: "feature",
+                 id: String(i),
+                 label: label,
+                 metrics: loc.metrics || loc.properties || {}
+               });
+            }
+          });
+
+          console.log("Setting highlighted locations:", highlights);
+          if (highlights.length > 0) {
+            setHighlightedLocations(highlights);
+            setSelectedPoint(null);
+            setSelectedRegion(null);
+          }
+          if (highlights.length === 0) {
+            return { success: true, message: "No valid locations could be parsed from the data. Map unchanged." };
+          }
+
+          const hasMetrics = sidebarData.some(d => d.metrics && Object.keys(d.metrics).length > 0);
+          if (hasMetrics) {
+             console.log("Auto-populating sidebar from show_on_map data", sidebarData);
+             setLeftSidebarContent(
+               <ComparisonTableContent 
+                 key={`show-on-map-${Date.now()}`}
+                 title="Selected Locations" 
+                 comparison={sidebarData} 
+               />,
+               { keepAlt: true }
+             );
+             openLeftSidebar();
+          }
+
+          const centerLng = (minLng + maxLng) / 2;
+          const centerLat = (minLat + maxLat) / 2;
+          const spread = Math.max(maxLng - minLng, maxLat - minLat);
+          let targetZoom = zoom ?? 11;
+          if (count === 1) targetZoom = zoom ?? 13;
+          else if (spread < 0.05) targetZoom = 13;
+          else if (spread < 0.1) targetZoom = 12;
+          else targetZoom = 11;
+
+          flyTo(centerLng, centerLat, targetZoom);
+          return { success: true };
+        }
         if (bbox != null && bbox.length === 4) {
-          const numBbox: [number, number, number, number] = [
-            Number(bbox[0]),
-            Number(bbox[1]),
-            Number(bbox[2]),
-            Number(bbox[3]),
-          ];
+          setHighlightedLocations([]);
+          const numBbox: [number, number, number, number] = [Number(bbox[0]), Number(bbox[1]), Number(bbox[2]), Number(bbox[3])];
           setSelectedRegion({ type: "bbox", bbox: numBbox });
           setSelectedPoint(null);
           const centerLng = (numBbox[0] + numBbox[2]) / 2;
           const centerLat = (numBbox[1] + numBbox[3]) / 2;
           flyTo(centerLng, centerLat, zoom ?? 12);
         } else if (longitude != null && latitude != null) {
+          setHighlightedLocations([]);
           setSelectedPoint({ lng: longitude, lat: latitude });
           setSelectedRegion(null);
           flyTo(longitude, latitude, zoom ?? 14);
         } else {
-          return { success: false, error: "Provide either (longitude, latitude) or bbox." };
+          return { success: false, error: "Provide locations array, or (longitude, latitude), or bbox." };
         }
         return { success: true };
       },
@@ -258,7 +522,7 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
     const analyzeProximity = defineTool({
       name: "analyze_proximity",
       description:
-        "Find areas within a radius of a specific point. Use for 'find greenest spot within 500m' or 'what is near here'. Returns matching areas with distance. When describing results to the user, use place names or 'this area'—never feature_id or grid cell id.",
+        "Find areas within a radius of a point (e.g. 'green options near the Mission within 2 miles'). The map is updated immediately with the top results—do NOT call this again to 're-plot' or 're-display'. Do NOT call show_on_map. Next: (1) compare_locations(targets: response.compare_targets); (2) optionally label_areas(labels: [...]) with names from get_place_name. When describing results, use place names—never feature_id or grid cell id.",
       inputSchema: z.object({
         longitude: z.number().optional().describe("Center longitude (defaults to selected point)"),
         latitude: z.number().optional().describe("Center latitude (defaults to selected point)"),
@@ -275,7 +539,47 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
           lng = selectedPoint.lng;
           lat = selectedPoint.lat;
         }
-        return await fetchProximity({ longitude: lng, latitude: lat, radius_meters, metric, threshold });
+        const data = await fetchProximity({ longitude: lng, latitude: lat, radius_meters, metric, threshold });
+        if (data?.status === "success" && Array.isArray(data.results) && data.results.length > 0) {
+          const topN = data.results.slice(0, 15);
+          const highlights: Array<{ type: "bbox"; bbox: [number, number, number, number] } | { type: "point"; lng: number; lat: number }> = [];
+          let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+          topN.forEach((r: { bbox?: number[]; center?: { longitude: number; latitude: number } }) => {
+            if (!r) return;
+            if (r.bbox && Array.isArray(r.bbox) && r.bbox.length === 4) {
+              const b = r.bbox.map(Number) as [number, number, number, number];
+              if (!b.some(isNaN)) {
+                highlights.push({ type: "bbox", bbox: b });
+                minLng = Math.min(minLng, b[0]);
+                minLat = Math.min(minLat, b[1]);
+                maxLng = Math.max(maxLng, b[2]);
+                maxLat = Math.max(maxLat, b[3]);
+              }
+            } else if (r.center) {
+              const lngV = Number(r.center.longitude);
+              const latV = Number(r.center.latitude);
+              if (!isNaN(lngV) && !isNaN(latV)) {
+                highlights.push({ type: "point", lng: lngV, lat: latV });
+                minLng = Math.min(minLng, lngV);
+                minLat = Math.min(minLat, latV);
+                maxLng = Math.max(maxLng, lngV);
+                maxLat = Math.max(maxLat, latV);
+              }
+            }
+          });
+          if (highlights.length > 0) {
+            highlightedLocationsRef.current = highlights;
+            setHighlightedLocations(highlights);
+            setSelectedPoint(null);
+            setSelectedRegion(null);
+            const centerLng = (minLng + maxLng) / 2;
+            const centerLat = (minLat + maxLat) / 2;
+            const spread = Math.max(maxLng - minLng, maxLat - minLat);
+            const targetZoom = spread < 0.05 ? 14 : spread < 0.1 ? 13 : 12;
+            flyTo(centerLng, centerLat, targetZoom);
+          }
+        }
+        return data;
       },
     });
 
@@ -408,7 +712,7 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
 
     const compareLocations = defineTool({
       name: "compare_locations",
-      description: "Compare the user's selected location (or specific points) with others. Use for questions like 'compare this with Ferry Building'.",
+      description: `Compare multiple locations in the Analysis sidebar and show metrics/charts. After find_extreme with top_n>1, pass targets = response.compare_targets only (do not call show_on_map). When user asks to show only certain metrics (e.g. "only NDVI", "just greenness"), pass metricsToShow: ['NDVI'] or ['Green Score']. Valid metric labels: NDVI, LST, Green Score, Heat Score, EVI, NDBI, BSI, Elevation, Slope, Night Lights.`,
       inputSchema: z.object({
         targets: z.array(z.union([
           z.object({
@@ -416,18 +720,22 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
             longitude: z.number().optional(),
             latitude: z.number().optional()
           }),
-          z.string().describe("Shorthand: 'selected' for current point, 'point:lng,lat' for coords, 'feature:id' for ID")
-        ])).optional().describe("List of targets. Can be objects or shorthand strings."),
-        placeholder_target_query: z.string().optional()
+          z.string().describe("After find_extreme use response.compare_targets; or 'selected'; or 'point:lng,lat'; or place name")
+        ])).optional().describe("Targets. When comparing find_extreme results use the response.compare_targets array."),
+        add_extreme: z.object({
+          metric: z.enum(["heat_score", "green_score", "lst", "ndvi", "evi", "ndbi", "bsi", "fog_score", "elevation", "slope", "night_lights"]).describe("Metric for extreme (e.g. lst for temp, green_score for vegetation)"),
+          mode: z.enum(["min", "max"]).describe("min = coolest/greenest, max = hottest"),
+          top_n: z.number().min(1).max(5).optional().default(1).describe("Number of extreme locations to add"),
+        }).optional().describe("Auto-add extreme location(s) - e.g. { metric: 'lst', mode: 'min' } for coolest area. Use when user asks to compare with cooler/hotter/greenest neighborhood."),
+        metricsToShow: z.array(z.string()).optional().describe("Only show these metrics in the comparison charts. E.g. ['NDVI'] for greenness only, ['LST','Heat Score'] for temp. Omit to show all metrics."),
       }),
       outputSchema: z.any(),
-      tool: async ({ targets }) => {
-        console.log("[Tambo] compare_locations called with:", JSON.stringify(targets));
+      tool: async ({ targets, add_extreme, metricsToShow }) => {
+        console.log("compareLocations tool called", { targets, add_extreme, metricsToShow });
         let rawTargets = targets || [];
         const finalTargets: Array<{ feature_id?: string; longitude?: number; latitude?: number }> = [];
 
         for (const t of rawTargets) {
-          console.log(`[Tambo] processing target: ${JSON.stringify(t)}, type: ${typeof t}`);
           if (typeof t === "string") {
             const lower = t.toLowerCase();
             if (lower === "selected" || lower === "current") {
@@ -445,31 +753,120 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
               }
             } else if (lower.startsWith("feature:")) {
               finalTargets.push({ feature_id: lower.replace("feature:", "") });
+            } else {
+              // Treat as place name - geocode it
+              const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+              if (mapboxToken) {
+                try {
+                  const res = await fetch(
+                    `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(t)}.json?access_token=${mapboxToken}&bbox=-122.5155,37.7024,-122.3549,37.8324&proximity=-122.4194,37.7749&limit=1`
+                  );
+                  const data = await res.json();
+                  const features = data?.features ?? [];
+                  if (features.length > 0) {
+                    const [lng, lat] = features[0].center;
+                    finalTargets.push({ longitude: lng, latitude: lat });
+                  }
+                } catch {
+                  // Skip on geocode failure
+                }
+              }
             }
           } else if (typeof t === "object" && t !== null) {
-            // It's already an object, pass it through
             finalTargets.push(t);
           }
         }
 
         // Fallback: If no targets and we have a selection, use it as one target
-        // (though comparison usually needs >1, the backend handles single lookup too)
         if (finalTargets.length === 0 && selectedPoint) {
           finalTargets.push({ longitude: selectedPoint.lng, latitude: selectedPoint.lat });
         }
 
-        if (finalTargets.length === 0) return { error: "No valid locations to compare." };
-
-        const response = await fetchComparison(finalTargets);
-
-        // Extract just the comparison array from the backend response
-        // Backend returns: { status: "success", comparison: [...] }
-        // Component expects: just the array
-        if (response && response.comparison) {
-          return response.comparison;
+        // Auto-add extreme location (e.g. coolest area) when user asks "compare with cooler neighborhood"
+        if (add_extreme) {
+          const extremeRes = await fetchFindExtreme({
+            metric: add_extreme.metric,
+            mode: add_extreme.mode as "max" | "min",
+            top_n: add_extreme.top_n ?? 1,
+          });
+          const results = extremeRes?.results ?? extremeRes;
+          const arr = Array.isArray(results) ? results : [];
+          for (let i = 0; i < Math.min(arr.length, add_extreme.top_n ?? 1); i++) {
+            const r = arr[i];
+            const center = r?.center;
+            if (center?.longitude != null && center?.latitude != null) {
+              finalTargets.push({ longitude: Number(center.longitude), latitude: Number(center.latitude) });
+            } else {
+              const bbox = r?.bbox;
+              if (bbox && Array.isArray(bbox) && bbox.length >= 4) {
+                const centerLng = (Number(bbox[0]) + Number(bbox[2])) / 2;
+                const centerLat = (Number(bbox[1]) + Number(bbox[3])) / 2;
+                finalTargets.push({ longitude: centerLng, latitude: centerLat });
+              }
+            }
+          }
         }
 
-        return response;
+        if (finalTargets.length === 0) return { error: "No valid locations to compare. Pass place names (e.g. 'Sunset District', 'Glen Park') in targets, click a point on the map and use 'selected', or provide coordinates as 'point:lng,lat'." };
+
+        const response = await fetchComparison(finalTargets);
+        console.log("fetchComparison response", response);
+
+        // Extract comparison array from backend
+        // Use a more robust check for response structure
+        const comparison = (response && response.comparison) ? response.comparison : (Array.isArray(response) ? response : []);
+        console.log("Extracted comparison data", comparison);
+
+        // Directly update Analysis sidebar with graphs when comparison data exists
+        if (comparison && comparison.length > 0) {
+          const safe = comparison.filter((c: { metrics?: unknown }) => {
+            if (!c || !c.metrics || typeof c.metrics !== 'object' || Array.isArray(c.metrics)) return false;
+            return Object.keys(c.metrics).length > 0;
+          });
+          console.log("Detailed comparison validation", { rawCount: comparison.length, validCount: safe.length, rawData: comparison, safeData: safe });
+
+          if (safe.length > 0) {
+            const metrics = metricsToShow && metricsToShow.length > 0 ? metricsToShow : (add_extreme ? (add_extreme.metric === "lst" ? ["LST", "Heat Score", "Green Score"] : add_extreme.metric === "green_score" ? ["Green Score", "NDVI", "LST"] : undefined) : undefined);
+            // Key forces React to re-mount when comparison changes (fixes sidebar not updating on new compare prompts)
+            // We append Date.now() to ensure that even if the locations are the same (e.g. same query run twice), the view refreshes.
+            const comparisonKey = safe.map((c: { id?: string; label?: string }) => `${c?.id ?? ''}-${c?.label ?? ''}`).join('|') + `-${Date.now()}`;
+
+            console.log("Updating LeftSidebar with ComparisonTableContent", { metrics, comparisonKey });
+
+            setLeftSidebarContent(
+              <ComparisonTableContent key={comparisonKey} title="Location Comparison" comparison={safe} metricsToShow={metrics} />
+            );
+            openLeftSidebar();
+          } else {
+             console.warn("No valid comparison data found after filtering (safe array empty).");
+          }
+        } else {
+             console.warn("Comparison data is empty or invalid.", comparison);
+        }
+
+        return comparison;
+      },
+    });
+
+    const labelAreas = defineTool({
+      name: "label_areas",
+      description: "Assign user-friendly labels to the areas currently highlighted on the map. Call this right after find_extreme or analyze_proximity (the map already has the regions—do not re-run those tools). Pass labels array in the same order as the highlighted areas. Use neighborhood names from get_place_name when possible.",
+      inputSchema: z.object({
+        labels: z.array(z.string()).describe("Labels for each highlighted area in order, e.g. ['Haight Ashbury', 'Diamond Heights', 'Forest Knolls']. Length should match number of highlighted areas."),
+      }),
+      outputSchema: z.object({ success: z.boolean(), message: z.string().optional() }),
+      tool: ({ labels }) => {
+        const current = highlightedLocationsRef.current.length > 0 ? highlightedLocationsRef.current : highlightedLocations;
+        if (!current || current.length === 0) {
+          return { success: false, message: "No areas are currently highlighted. Run find_extreme or analyze_proximity first." };
+        }
+        const updated = current.map((loc, i) => ({
+          ...loc,
+          label: labels[i] != null && String(labels[i]).trim() ? String(labels[i]).trim() : loc.label ?? String(i + 1),
+        }));
+        highlightedLocationsRef.current = updated;
+        setHighlightedLocations(updated);
+        return { success: true, message: `Labeled ${updated.length} areas on the map.` };
       },
     });
 
@@ -517,8 +914,8 @@ CRITICAL: You MUST provide EITHER bbox OR (longitude AND latitude). Never call t
       }
     });
 
-    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, getPlaceName, searchPlaces, toggleMapLayer, visualizeHeatmap, compareLocations, analyzeTemporalTrends];
-  }, [flyTo, selectedPoint, selectedRegion, setSelectedPoint, setSelectedRegion, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle]);
+    return [navigateMap, getInsightAtPoint, getInsightForRegion, findExtreme, showOnMap, filterMapView, analyzeProximity, getPlaceName, searchPlaces, toggleMapLayer, visualizeHeatmap, compareLocations, labelAreas, analyzeTemporalTrends];
+  }, [flyTo, selectedPoint, selectedRegion, highlightedLocations, setSelectedPoint, setSelectedRegion, setHighlightedLocations, setActiveFilter, setIsLayerVisible, setHeatmapMetric, setMapStyle, setLeftSidebarContent, openLeftSidebar]);
 }
 
 
