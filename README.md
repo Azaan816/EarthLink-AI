@@ -79,6 +79,8 @@ The same chat turn that calls `compare_locations` can push a **ComparisonTable**
 
 Insights are driven by **Harmonized Sentinel-2 MSI Level-2A (SR)** — the same [dataset](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED) in Google Earth Engine: atmospherically corrected surface reflectance, 13 spectral bands (visible/NIR at 10 m, red edge/SWIR at 20 m). NDVI, green score, heat score, and related metrics are derived from this source. The pipeline is built for [Google Earth Engine](https://earthengine.google.com/); for the MVP we use precomputed GeoJSON (e.g. San Francisco) so the **agent experience** is what we're judged on—same tools and prompts will plug into live GEE when we scale.
 
+- **Coverage:** The app currently covers the **San Francisco area** only, because our precomputed data is limited to this region.
+
 ---
 
 ## 🧰 Tech stack
