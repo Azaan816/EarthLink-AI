@@ -101,6 +101,16 @@ Insights are driven by **Harmonized Sentinel-2 MSI Level-2A (SR)** — the same 
 
 ---
 
+## 💬 Example Prompt
+
+EarthLink AI chains tools to answer complex, real-world questions. Try this in the chat:
+
+> *I have asthma and I'm looking for a healthy running route near Golden Gate Park. I need a spot with high vegetation (high Green Score) to ensure better air quality. Find me the greenest area within a 2000-meter radius of the park. Once you find the best spot, tell me its name/address and show me a chart of how the vegetation (NDVI) has changed there over the last few years to make sure it's not declining.*
+
+The AI will: `search_places` → `analyze_proximity` (radius 2000m, green_score) → `get_place_name` → `compare_locations` or `get_insight_at_point` → `analyze_temporal_trends` (NDVI) → render **GrowthChart** in the sidebar. One prompt, multi-step flow—all driven by Tambo tools and Living UI.
+
+---
+
 ## 🧰 Tech stack
 
 | Layer | Tech |
