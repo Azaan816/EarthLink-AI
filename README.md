@@ -83,103 +83,21 @@ Insights are driven by **Harmonized Sentinel-2 MSI Level-2A (SR)** — the same 
 
 ---
 
-## 💬 Example Prompts
+## 📸 Screenshots
 
-Here are example prompts that showcase EarthLink AI's capabilities. Each demonstrates how natural language drives real actions on the map and sidebar.
+<p align="center">
+  <strong>Map view (Point mode)</strong> — Dark street map with chat sidebar. Click a point or type to ask; the AI drives map and analysis.
+</p>
+<p align="center">
+  <img src="frontend/public/pic_earth_link.jpeg" alt="EarthLink AI — Map view" width="800" />
+</p>
 
-### 🧭 Exploration & Navigation
-
-| Prompt | What happens |
-|--------|--------------|
-| *"Take me to the Mission District"* | `search_places` flies the map to the Mission District and drops a pin |
-| *"Go to Golden Gate Park"* | `search_places` locates and zooms to Golden Gate Park |
-| *"What's the name of this place?"* | `get_place_name` reverse-geocodes the selected point to show the neighborhood or address |
-| *"Zoom out to see all of San Francisco"* | `navigate_map` adjusts the viewport to show the full city |
-
-### 🔍 Discovery & Finding Locations
-
-| Prompt | What happens |
-|--------|--------------|
-| *"Show me the 5 hottest areas in San Francisco"* | `find_extreme` locates the top 5 heat-score areas, highlights them on the map, and shows metrics |
-| *"Where are the greenest spots in the city?"* | `find_extreme` finds areas with highest green score and plots them |
-| *"Find the coolest neighborhoods"* | `find_extreme` with `mode: min` on `lst` (land surface temperature) |
-| *"Show me 3 areas with the most vegetation and 3 with the least"* | Two `find_extreme` calls with `append: true` — first for max NDVI, then min NDVI, keeping all 6 on the map |
-| *"What are the most built-up areas?"* | `find_extreme` on `ndbi` (Normalized Difference Built-up Index) |
-
-### 📍 Proximity Analysis
-
-| Prompt | What happens |
-|--------|--------------|
-| *"Find green spaces within 1 mile of my location"* | `analyze_proximity` searches for high green-score areas within the radius and plots results |
-| *"Show me cool areas near the Ferry Building"* | `search_places` → `analyze_proximity` chains to find thermally comfortable spots nearby |
-| *"What parks are within 2km of Union Square?"* | `analyze_proximity` with metric filter for high NDVI |
-| *"Find shaded areas within walking distance of SOMA"* | Proximity search with green score threshold |
-
-### 📊 Point & Region Insights
-
-| Prompt | What happens |
-|--------|--------------|
-| *"What's the environmental profile of this spot?"* | `get_insight_at_point` returns NDVI, heat score, LST, and other metrics for the clicked location |
-| *"Analyze this area I just drew"* | `get_insight_for_region` computes aggregates (mean, min, max) for the selected rectangle |
-| *"How green is the Presidio?"* | `search_places` → `get_insight_for_region` to get vegetation metrics |
-| *"What's the temperature like in the Financial District?"* | Insight query focused on LST and heat score |
-
-### 🔥 Heatmap & Visual Filters
-
-| Prompt | What happens |
-|--------|--------------|
-| *"Show me a heat map of the city"* | `visualize_heatmap` with `metric: heat` — red/orange for hot, blue for cool |
-| *"Visualize vegetation across San Francisco"* | `visualize_heatmap` with `metric: greenness` — green choropleth layer |
-| *"Highlight only the areas with NDVI above 0.5"* | `filter_map_view` applies a visual filter to show high-vegetation zones |
-| *"Show me where heat score exceeds 0.8"* | Filter to display heat-vulnerable areas |
-| *"Switch to satellite view"* | `toggle_map_layer` changes the basemap style |
-
-### ⚖️ Comparison & Analysis
-
-| Prompt | What happens |
-|--------|--------------|
-| *"Compare the Mission and the Sunset"* | `compare_locations` geocodes both neighborhoods and shows side-by-side metrics with bar/radar charts |
-| *"How does Pacific Heights compare to the Tenderloin for heat?"* | Comparison with `metricsToShow: ['LST', 'Heat Score']` for focused analysis |
-| *"Compare the 3 hottest areas with the 3 coolest"* | `find_extreme` (2x with append) → `compare_locations` chains all 6 locations into one comparison |
-| *"Is this spot cooler than the city average?"* | `compare_locations` with `add_extreme` to auto-add a reference point |
-
-### 🏷️ Labeling & Annotation
-
-| Prompt | What happens |
-|--------|--------------|
-| *"Label the top 3 green areas on the map"* | `find_extreme` → `label_areas` with `labelOnlyFirst: 3` adds neighborhood names to the top results |
-| *"Name these spots"* | `get_place_name` for each location → `label_areas` to annotate |
-
-### 📈 Temporal Trends
-
-| Prompt | What happens |
-|--------|--------------|
-| *"How has vegetation changed here over time?"* | `analyze_temporal_trends` shows a line chart of NDVI over multiple years |
-| *"Show me the greenness trend for Golden Gate Park"* | Temporal analysis with GrowthChart component |
-
----
-
-### 🔗 Multi-Step Workflows
-
-EarthLink AI chains tools for complex queries:
-
-**Example 1: "Find the 3 greenest areas near downtown and compare them"**
-1. `search_places` → flies to downtown SF
-2. `analyze_proximity` → finds high green-score areas within radius
-3. `compare_locations` → shows side-by-side metrics in sidebar
-4. `label_areas` → annotates top 3 with neighborhood names
-
-**Example 2: "Show me the hottest and coolest spots and tell me why"**
-1. `find_extreme` (heat_score, max, top_n=3) → plots hottest areas
-2. `find_extreme` (lst, min, top_n=3, append=true) → adds coolest without removing hot
-3. `compare_locations` → displays full comparison with charts
-4. **KeyTakeaways** component → AI explains the urban heat island effect
-
-**Example 3: "I'm looking for a cool, green neighborhood to move to — what are my options near the Marina?"**
-1. `search_places` → flies to Marina District
-2. `analyze_proximity` (radius=2000m, metric=green_score, threshold=0.6) → finds green options
-3. `compare_locations` with `metricsToShow: ['Green Score', 'LST', 'Heat Score']`
-4. **InsightCard** + **KeyTakeaways** → AI recommends top picks with reasoning
+<p align="center">
+  <strong>Satellite mode</strong> — Satellite imagery with environmental analysis. Select a point to see NDVI, LST, Heat Score, Green Score, and elevation. Radar charts, line charts, and temporal trends in the sidebar.
+</p>
+<p align="center">
+  <img src="frontend/public/pic1-earthlink.jpeg" alt="EarthLink AI — Satellite mode with analysis" width="800" />
+</p>
 
 ---
 
